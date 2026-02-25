@@ -175,15 +175,15 @@ class BTCTader:
             take_profit=take_profit
         )
     
-    def run_backtest(self, days: int = 30, max_hours: int = 8, leverage: int = 15):
+    def run_backtest(self, days: int = 30, max_hours: int = 12, leverage: int = 10):
         """回测：优化版指标信号 + 移动止损 + 分批止盈 + 动态仓位"""
         import sys
         import numpy as np
         
         # 优化后的参数
-        ATR_SL = 1.5  # 止损ATR倍数
+        ATR_SL = 2.0  # 止损ATR倍数 (优化后)
         RISK_PERCENT = 0.02  # 单笔风险2%
-        TRAILING_ATR = 1.0  # 移动止损触发阈值（优化后最优）
+        TRAILING_ATR = 1.0  # 移动止损触发阈值
         
         print(f"开始回测 (最近 {days} 天) - 优化版指标信号")
         print(f"参数: 持仓{max_hours}h 杠杆{leverage}x | ATR_SL={ATR_SL} | Trailing={TRAILING_ATR}xATR")
