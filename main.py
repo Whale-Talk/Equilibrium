@@ -411,20 +411,20 @@ class BTCTader:
         
         # ========== 买入信号 (只在上涨趋势中做多) ==========
         if trend == "up":
-            if rsi < 30 and macd > macd_signal and close < bb_middle:
+            if rsi < 40 and macd > macd_signal:
                 return "buy"
-            if rsi < 35 and macd > macd_signal and adx > 20:
+            if rsi < 35 and adx > 20:
                 return "buy"
-            if rsi < 25 and adx > 30 and close < bb_lower * 1.02:
+            if rsi < 30 and close < bb_middle:
                 return "buy"
         
         # ========== 卖出信号 (只在下跌趋势中做空) ==========
         if trend == "down":
-            if rsi > 70 and macd < macd_signal:
+            if rsi > 60 and macd < macd_signal:
                 return "sell"
-            if rsi > 65 and close < ma20 and adx > 20:
+            if rsi > 55 and close < ma20:
                 return "sell"
-            if macd < macd_signal and macd_hist < 0 and adx > 25:
+            if macd < macd_signal and macd_hist < 0 and adx > 20:
                 return "sell"
         
         return "hold"
