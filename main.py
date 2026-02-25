@@ -124,15 +124,15 @@ class BTCTader:
         }
     
     def check_positions(self):
-        if not self.trade_executor.get_position():
-            return
-        
         current_price = self.okx_client.get_current_price()
         if not current_price:
             return
         
-        self.trade_executor.check_stop_loss(current_price)
-        self.trade_executor.check_take_profit(current_price)
+        if self.trade_executor.get_position():
+            self.trade_executor.check_stop_loss(current_price)
+            self.trade_executor.check_take_profit(current_price)
+        else:
+            self.trade_executor.check_and_withdraw_profit()
     
     def execute_signal(self, signal):
         if not signal or signal.get("action") == "hold":

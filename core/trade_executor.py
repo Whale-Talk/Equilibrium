@@ -13,6 +13,10 @@ class TradeExecutor:
         self.data_manager = data_manager or DataManager()
         self.notification = notification or NotificationManager(config)
         self.balance = config.INITIAL_BALANCE
+        self.base_balance = config.BASE_BALANCE
+        self.withdraw_profit = config.WITHDRAW_PROFIT
+        self.total_withdrawn = 0
+        self.last_withdraw_month = None
         self.position = None
     
     def open_position(self, action: str, price: float, amount: float, 
@@ -146,3 +150,33 @@ class TradeExecutor:
     
     def get_position(self) -> Optional[Dict]:
         return self.position
+    
+    def check_and_withdraw_profit(self) -> Optional[float]:
+        """每月检查并提取收益，保持基础余额"""
+        if not self.withdraw_profit:
+            return None
+        
+        if self.position:
+            return None
+        
+        now = datetime.now()
+        current_month = now.strftime("%Y-%m")
+        
+        if self.last_withdraw_month == current_month:
+            return None
+        
+        if self.balance > self.base_balance:
+            withdrawn = self.balance - self.base_balance
+            self.total_withdrawn += withdrawn
+            self.balance = self.base_balance
+            self.last_withdraw_month = current_month
+            
+            msg = f"💰 每月收益提取\n提取金额: ${withdrawn:.2f}\n当前余额: ${self.balance:.2f}\n累计提取: ${self.total_withdrawn:.2f}"
+            print(msg)
+            self.notification.send_message(msg)
+            
+            self.data_manager.save_balance(self.balance, f"withdraw_{current_month}")
+            
+            return withdrawn
+        
+        return None

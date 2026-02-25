@@ -11,6 +11,9 @@ class Config:
     LEVERAGE = 10
     POSITION_SIZE = 10.0
     INITIAL_BALANCE = 100.0
+    
+    WITHDRAW_PROFIT = True  # 每月提取收益，保持初始本金
+    BASE_BALANCE = 100.0   # 提取后的基础余额
 
     STOP_LOSS_RATIO = 0.15
     TAKE_PROFIT_RATIO = 0.30
