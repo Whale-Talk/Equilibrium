@@ -175,18 +175,22 @@ class BTCTader:
             take_profit=take_profit
         )
     
-    def run_backtest(self, days: int = 30, max_hours: int = 12, leverage: int = 10):
-        """回测：优化版指标信号 + 移动止损 + 分批止盈 + 动态仓位"""
+    def run_backtest(self, days: int = 30, max_hours: int = 12, leverage: int = 10, 
+                   enable_add_position: bool = True, withdraw_profit: bool = True):
+        """回测：优化版指标信号 + 移动止损 + 分批止盈 + 动态仓位 + 加仓 + 每月提取收益"""
         import sys
         import numpy as np
+        from datetime import datetime
         
         # 优化后的参数
         ATR_SL = 2.0  # 止损ATR倍数 (优化后)
         RISK_PERCENT = 0.02  # 单笔风险2%
         TRAILING_ATR = 1.0  # 移动止损触发阈值
+        BASE_BALANCE = 100.0  # 每月提取后的基础余额
         
-        print(f"开始回测 (最近 {days} 天) - 优化版指标信号")
-        print(f"参数: 持仓{max_hours}h 杠杆{leverage}x | ATR_SL={ATR_SL} | Trailing={TRAILING_ATR}xATR")
+        print(f"开始回测 (最近 {days} 天)")
+        print(f"参数: 持仓{max_hours}h 杠杆{leverage}x | ATR_SL={ATR_SL}")
+        print(f"加仓: {'启用' if enable_add_position else '禁用'} | 每月提取: {'启用' if withdraw_profit else '禁用'}")
         sys.stdout.flush()
         
         # 根据天数计算需要多少根K线（每天24根 + 预留指标计算需要20根）
@@ -211,6 +215,7 @@ class BTCTader:
         df = calculate_all_indicators(klines)
         
         balance = self.config.INITIAL_BALANCE
+        base_balance = BASE_BALANCE if withdraw_profit else balance
         max_balance = balance
         trades = []
         position = None
@@ -218,6 +223,8 @@ class BTCTader:
         win_count = 0
         loss_count = 0
         daily_returns = []
+        total_withdrawn = 0
+        last_withdraw_month = None
         
         for i in range(20, len(df)):
             latest = df.iloc[i]
@@ -250,6 +257,37 @@ class BTCTader:
                 print(f"[回测] 进度: {i}/{len(df)} | 价格: ${price:.2f} | RSI: {rsi:.2f} | 趋势: {trend}", flush=True)
             
             signal = self._simple_signal(latest, trend)
+            
+            # ========== 处理持仓 ==========
+            if position is not None:
+                # 同向信号 → 加仓
+                if enable_add_position and signal == position["action"]:
+                    add_size = balance * RISK_PERCENT / (atr * ATR_SL / price)
+                    add_size = max(5, min(add_size, balance * 0.3))  # 最多加30%仓位
+                    position["position_size"] = position.get("position_size", 0) + add_size
+                    position["add_count"] = position.get("add_count", 0) + 1
+                    print(f"[回测] ➕ 加仓 @ ${price:.2f} | 仓位: ${position['position_size']:.2f}", flush=True)
+                
+                # 反向信号 → 平仓
+                elif signal != "hold" and signal != position["action"]:
+                    # 计算平仓盈亏
+                    if position["action"] == "buy":
+                        pnl_pct = (price - position["price"]) / position["price"] * position["leverage"]
+                    else:
+                        pnl_pct = (position["price"] - price) / position["price"] * position["leverage"]
+                    
+                    pnl = position["position_size"] * pnl_pct
+                    balance += pnl
+                    
+                    if pnl > 0:
+                        win_count += 1
+                    else:
+                        loss_count += 1
+                    
+                    trades.append({"action": position["action"], "price": price, "pnl": pnl, "type": "close", "reason": "反向信号"})
+                    print(f"[回测] ⚠️ 反向信号平仓 @ ${price:.2f} | 盈亏: ${pnl:.2f} | 余额: ${balance:.2f}", flush=True)
+                    
+                    position = None
             
             if signal == "buy" and position is None:
                 stop_loss = bb_lower - atr * ATR_SL
@@ -352,8 +390,23 @@ class BTCTader:
                     print(f"[回测] {emoji} 平仓 @ ${price:.2f} | 盈亏: ${pnl:.2f} | 原因: {reason} | 余额: ${balance:.2f}", flush=True)
                     
                     position = None
+                    
+                    # 每月提取收益
+                    if withdraw_profit and balance > base_balance:
+                        withdrawn = balance - base_balance
+                        total_withdrawn += withdrawn
+                        balance = base_balance
+                        print(f"[回测] 💰 每月提取收益: ${withdrawn:.2f} | 累计提取: ${total_withdrawn:.2f}", flush=True)
         
-        # 计算回撤
+        # 月末检查提取收益
+        if withdraw_profit and i + 1 < len(df):
+            current_month = datetime.fromtimestamp(df.iloc[i]['timestamp']/1000).strftime('%Y-%m')
+            next_month = datetime.fromtimestamp(df.iloc[i+1]['timestamp']/1000).strftime('%Y-%m')
+            if current_month != next_month and position is None and balance > base_balance:
+                withdrawn = balance - base_balance
+                total_withdrawn += withdrawn
+                balance = base_balance
+                print(f"[回测] 💰 月末提取收益: ${withdrawn:.2f} | 累计提取: ${total_withdrawn:.2f}", flush=True)
         max_drawdown = 0
         equity_curve = [self.config.INITIAL_BALANCE]
         for t in trades:
@@ -376,8 +429,11 @@ class BTCTader:
         print(f"\n=== 回测结果 (优化版) ===", flush=True)
         print(f"持仓{max_hours}h | 杠杆{leverage}x | 风险比例{RISK_PERCENT*100}%", flush=True)
         print(f"初始资金: ${self.config.INITIAL_BALANCE:.2f}", flush=True)
+        if withdraw_profit:
+            print(f"累计提取收益: ${total_withdrawn:.2f}", flush=True)
         print(f"最终余额: ${balance:.2f}", flush=True)
-        print(f"收益率: {((balance - self.config.INITIAL_BALANCE) / self.config.INITIAL_BALANCE * 100):.2f}%", flush=True)
+        total_return = total_withdrawn + (balance - self.config.INITIAL_BALANCE)
+        print(f"总收益: ${total_return:.2f} ({total_return/self.config.INITIAL_BALANCE*100:.2f}%)", flush=True)
         print(f"最大回撤: {max_drawdown * 100:.2f}%", flush=True)
         print(f"夏普比率: {sharpe:.2f}", flush=True)
         print(f"交易次数: {len([t for t in trades if t.get('type') == 'open'])}", flush=True)
