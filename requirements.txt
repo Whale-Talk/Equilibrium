@@ -1,0 +1,7 @@
+okx-sdk
+pandas
+numpy
+python-dotenv
+apscheduler
+alpha-vantage
+openai
