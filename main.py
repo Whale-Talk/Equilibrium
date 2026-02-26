@@ -176,8 +176,11 @@ class BTCTader:
         )
     
     def run_backtest(self, days: int = 30, max_hours: int = 12, leverage: int = 10, 
-                   enable_add_position: bool = True, withdraw_profit: bool = True):
-        """回测：优化版指标信号 + 移动止损 + 分批止盈 + 动态仓位 + 加仓 + 每月提取收益"""
+                   enable_add_position: bool = True, withdraw_profit: bool = True,
+                   strategy_version: str = 'original', quarter: str = None):
+        """回测：优化版指标信号 + 移动止损 + 分批止盈 + 动态仓位 + 加仓 + 每月提取收益
+        strategy_version: 'original', 'improve1', 'improve2', 'improve_both'
+        quarter: 'Q1','Q2','Q3','Q4' """
         import sys
         import numpy as np
         from datetime import datetime
@@ -214,6 +217,18 @@ class BTCTader:
         
         df = calculate_all_indicators(klines)
         
+        if quarter:
+            df['_month'] = df['timestamp'].apply(lambda x: datetime.fromtimestamp(x/1000).month)
+            if quarter == 'Q1':
+                df = df[df['_month'].isin([1,2,3])].reset_index(drop=True)
+            elif quarter == 'Q2':
+                df = df[df['_month'].isin([4,5,6])].reset_index(drop=True)
+            elif quarter == 'Q3':
+                df = df[df['_month'].isin([7,8,9])].reset_index(drop=True)
+            elif quarter == 'Q4':
+                df = df[df['_month'].isin([10,11,12])].reset_index(drop=True)
+            print(f"[回测] 季度{quarter}筛选后: {len(df)} 条", flush=True)
+        
         balance = self.config.INITIAL_BALANCE
         base_balance = BASE_BALANCE if withdraw_profit else balance
         max_balance = balance
@@ -226,6 +241,11 @@ class BTCTader:
         total_withdrawn = 0
         last_withdraw_month = None
         
+        rsi_buy_count = 0
+        rsi_sell_count = 0
+        macd_pos_count = 0
+        macd_neg_count = 0
+        
         for i in range(20, len(df)):
             latest = df.iloc[i]
             price = latest['close']
@@ -235,14 +255,26 @@ class BTCTader:
             bb_upper = latest.get('bb_upper', price * 1.02)
             atr = latest.get('atr', price * 0.02)
             ma20 = latest.get('ma20', price)
+            macd = latest.get('macd', 0)
+            macd_signal = latest.get('macd_signal', 0)
+            volume = latest.get('volume', 0)
+            adx = latest.get('adx', 50)
             
-            # 计算动态仓位（基于风险2%）
-            position_size = balance * RISK_PERCENT / (atr * ATR_SL / price)  # 根据止损幅度计算
-            position_size = max(5, min(position_size, balance * 0.5))  # 限制在5-50%仓位
+            is_ranging = adx < 25
+            dynamic_max_hours = 4 if is_ranging and strategy_version in ['improve2', 'improve_both'] else max_hours
             
-            # 判断趋势：基于MA20斜率
+            if i >= 20:
+                vol_ma = df.iloc[i-20:i]['volume'].mean()
+            else:
+                vol_ma = volume
+            
+            position_size = balance * RISK_PERCENT / (atr * ATR_SL / price)
+            if is_ranging and strategy_version in ['improve2', 'improve_both']:
+                position_size = position_size * 0.5
+            position_size = max(5, min(position_size, balance * 0.5))
+            
             if i >= 24:
-                ma20_prev = df.iloc[i-24].get('ma20', price)  # 24小时前的MA20
+                ma20_prev = df.iloc[i-24].get('ma20', price)
                 ma20_now = ma20
                 if ma20_now > ma20_prev * 1.01:
                     trend = "up"
@@ -256,17 +288,46 @@ class BTCTader:
             if i % 50 == 0:
                 print(f"[回测] 进度: {i}/{len(df)} | 价格: ${price:.2f} | RSI: {rsi:.2f} | 趋势: {trend}", flush=True)
             
-            signal = self._simple_signal(latest, trend)
+            if strategy_version in ['improve1', 'improve_both']:
+                if rsi < 40:
+                    rsi_buy_count += 1
+                else:
+                    rsi_buy_count = 0
+                
+                if rsi > 60:
+                    rsi_sell_count += 1
+                else:
+                    rsi_sell_count = 0
+                
+                if macd > macd_signal:
+                    macd_pos_count += 1
+                    macd_neg_count = 0
+                elif macd < macd_signal:
+                    macd_neg_count += 1
+                    macd_pos_count = 0
+                
+                vol_ok = volume > vol_ma
+                
+                signal = 'hold'
+                if trend == 'up' and rsi_buy_count >= 0 and macd_pos_count >= 0 and vol_ok:
+                    signal = 'buy'
+                elif trend == 'down' and rsi_sell_count >= 0 and macd_neg_count >= 0 and vol_ok:
+                    signal = 'sell'
+            else:
+                signal = self._simple_signal(latest, trend)
             
             # ========== 处理持仓 ==========
             if position is not None:
                 # 同向信号 → 加仓
                 if enable_add_position and signal == position["action"]:
-                    add_size = balance * RISK_PERCENT / (atr * ATR_SL / price)
-                    add_size = max(5, min(add_size, balance * 0.3))  # 最多加30%仓位
-                    position["position_size"] = position.get("position_size", 0) + add_size
-                    position["add_count"] = position.get("add_count", 0) + 1
-                    print(f"[回测] ➕ 加仓 @ ${price:.2f} | 仓位: ${position['position_size']:.2f}", flush=True)
+                    if is_ranging and strategy_version in ['improve2', 'improve_both']:
+                        pass
+                    else:
+                        add_size = balance * RISK_PERCENT / (atr * ATR_SL / price)
+                        add_size = max(5, min(add_size, balance * 0.3))
+                        position["position_size"] = position.get("position_size", 0) + add_size
+                        position["add_count"] = position.get("add_count", 0) + 1
+                        print(f"[回测] ➕ 加仓 @ ${price:.2f} | 仓位: ${position['position_size']:.2f}", flush=True)
                 
                 # 反向信号 → 平仓
                 elif signal != "hold" and signal != position["action"]:
@@ -354,10 +415,10 @@ class BTCTader:
                         position["tp1_hit"] = True
                         print(f"[回测] 移动止损触发 @ ${price:.2f} | 止损移至: ${position['price']:.2f}", flush=True)
                 
-                should_close = hit_tp2 or hit_sl or (i - position["entry_idx"]) >= max_hours
+                should_close = hit_tp2 or hit_sl or (i - position["entry_idx"]) >= dynamic_max_hours
                 
                 # 第一档止盈后继续持有但止损移到保本
-                if hit_tp1 and not hit_sl and (i - position["entry_idx"]) < max_hours:
+                if hit_tp1 and not hit_sl and (i - position["entry_idx"]) < dynamic_max_hours:
                     position["tp1_hit"] = True
                     position["stop_loss"] = position["price"]  # 移动止损到保本
                     print(f"[回测] ✅ 第一档止盈 @ ${price:.2f} | 继续持有 | 止损移至保本", flush=True)
@@ -521,6 +582,8 @@ def main():
     parser = argparse.ArgumentParser(description="BTC TradingAgents Trader")
     parser.add_argument("--backtest", action="store_true", help="运行回测")
     parser.add_argument("--days", type=int, default=30, help="回测天数")
+    parser.add_argument("--version", type=str, default='original', choices=['original', 'improve1', 'improve2', 'improve_both'], help="策略版本")
+    parser.add_argument("--quarter", type=str, choices=['Q1','Q2','Q3','Q4'], help="按季度测试")
     parser.add_argument("--once", action="store_true", help="运行一次分析并执行")
     
     args = parser.parse_args()
@@ -528,7 +591,7 @@ def main():
     trader = BTCTader()
     
     if args.backtest:
-        result = trader.run_backtest(args.days)
+        result = trader.run_backtest(args.days, strategy_version=args.version, quarter=args.quarter)
         
         if result:
             message = f"""
