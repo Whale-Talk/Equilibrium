@@ -485,22 +485,47 @@ class BTCTader:
                     
                     position = None
                     
-                    # 每月提取收益
-                    if withdraw_profit and balance > base_balance:
-                        withdrawn = balance - base_balance
-                        total_withdrawn += withdrawn
-                        balance = base_balance
-                        print(f"[回测] 💰 每月提取收益: ${withdrawn:.2f} | 累计提取: ${total_withdrawn:.2f}", flush=True)
+                    # 每月提取/补充收益
+                    if withdraw_profit:
+                        if balance > base_balance:
+                            # 盈利：提取超出部分
+                            withdrawn = balance - base_balance
+                            total_withdrawn += withdrawn
+                            balance = base_balance
+                            print(f"[回测] 💰 每月提取收益: ${withdrawn:.2f} | 累计提取: ${total_withdrawn:.2f}", flush=True)
+                        elif balance < base_balance and total_withdrawn > 0:
+                            # 亏损：补充到100U（从已提取中取回）
+                            needed = base_balance - balance
+                            if total_withdrawn >= needed:
+                                total_withdrawn -= needed
+                                balance = base_balance
+                                print(f"[回测] 🔄 补充本金: ${needed:.2f} | 剩余提取: ${total_withdrawn:.2f}", flush=True)
+                            else:
+                                # 已提取的不够补充，全部取回
+                                balance += total_withdrawn
+                                total_withdrawn = 0
+                                print(f"[回测] 🔄 补充本金: ${balance-100+total_withdrawn:.2f} | 剩余提取: $0.00", flush=True)
         
         # 月末检查提取收益
         if withdraw_profit and i + 1 < len(df):
             current_month = datetime.fromtimestamp(df.iloc[i]['timestamp']/1000).strftime('%Y-%m')
             next_month = datetime.fromtimestamp(df.iloc[i+1]['timestamp']/1000).strftime('%Y-%m')
-            if current_month != next_month and position is None and balance > base_balance:
-                withdrawn = balance - base_balance
-                total_withdrawn += withdrawn
-                balance = base_balance
-                print(f"[回测] 💰 月末提取收益: ${withdrawn:.2f} | 累计提取: ${total_withdrawn:.2f}", flush=True)
+            if current_month != next_month and position is None:
+                if balance > base_balance:
+                    withdrawn = balance - base_balance
+                    total_withdrawn += withdrawn
+                    balance = base_balance
+                    print(f"[回测] 💰 月末提取收益: ${withdrawn:.2f} | 累计提取: ${total_withdrawn:.2f}", flush=True)
+                elif balance < base_balance and total_withdrawn > 0:
+                    needed = base_balance - balance
+                    if total_withdrawn >= needed:
+                        total_withdrawn -= needed
+                        balance = base_balance
+                        print(f"[回测] 🔄 月末补充本金: ${needed:.2f}", flush=True)
+                    else:
+                        balance += total_withdrawn
+                        total_withdrawn = 0
+                        print(f"[回测] 🔄 月末补充本金: ${balance-100+total_withdrawn:.2f}", flush=True)
         max_drawdown = 0
         equity_curve = [self.config.INITIAL_BALANCE]
         for t in trades:
@@ -524,9 +549,9 @@ class BTCTader:
         print(f"持仓{max_hours}h | 杠杆{leverage}x | 风险比例{RISK_PERCENT*100}%", flush=True)
         print(f"初始资金: ${self.config.INITIAL_BALANCE:.2f}", flush=True)
         if withdraw_profit:
-            print(f"累计提取收益: ${total_withdrawn:.2f}", flush=True)
+            print(f"累计提取收益(扣除补充后): ${total_withdrawn:.2f}", flush=True)
         print(f"最终余额: ${balance:.2f}", flush=True)
-        total_return = total_withdrawn + (balance - self.config.INITIAL_BALANCE)
+        total_return = balance + total_withdrawn - self.config.INITIAL_BALANCE
         print(f"总收益: ${total_return:.2f} ({total_return/self.config.INITIAL_BALANCE*100:.2f}%)", flush=True)
         print(f"最大回撤: {max_drawdown * 100:.2f}%", flush=True)
         print(f"夏普比率: {sharpe:.2f}", flush=True)
