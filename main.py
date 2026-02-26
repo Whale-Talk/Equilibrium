@@ -260,8 +260,42 @@ class BTCTader:
             volume = latest.get('volume', 0)
             adx = latest.get('adx', 50)
             
+            # 判断市场状态
             is_ranging = adx < 25
-            dynamic_max_hours = 4 if is_ranging and strategy_version in ['improve2', 'improve_both'] else max_hours
+            is_strong_trend = False
+            if i >= 24:
+                ma20_prev = df.iloc[i-24].get('ma20', price)
+                ma20_now = ma20
+                ma20_slope = ma20_now / ma20_prev if ma20_prev > 0 else 1.0
+                is_strong_trend = (ma20_slope > 1.01 or ma20_slope < 0.99) and adx > 30
+            
+            # 动态参数调整
+            if strategy_version == 'dynamic':
+                if is_strong_trend:
+                    dynamic_max_hours = max_hours
+                    position_size_ratio = 1.0
+                    allow_add = True
+                else:
+                    dynamic_max_hours = 4
+                    position_size_ratio = 0.5
+                    allow_add = False
+            elif strategy_version == 'moderate':
+                if is_ranging:
+                    dynamic_max_hours = max_hours
+                    position_size_ratio = 0.5
+                    allow_add = False
+                else:
+                    dynamic_max_hours = max_hours
+                    position_size_ratio = 1.0
+                    allow_add = True
+            elif strategy_version in ['improve2', 'improve_both']:
+                dynamic_max_hours = 4 if is_ranging else max_hours
+                position_size_ratio = 0.5 if is_ranging else 1.0
+                allow_add = not is_ranging
+            else:
+                dynamic_max_hours = max_hours
+                position_size_ratio = 1.0
+                allow_add = True
             
             if i >= 20:
                 vol_ma = df.iloc[i-20:i]['volume'].mean()
@@ -269,8 +303,7 @@ class BTCTader:
                 vol_ma = volume
             
             position_size = balance * RISK_PERCENT / (atr * ATR_SL / price)
-            if is_ranging and strategy_version in ['improve2', 'improve_both']:
-                position_size = position_size * 0.5
+            position_size = position_size * position_size_ratio
             position_size = max(5, min(position_size, balance * 0.5))
             
             if i >= 24:
@@ -320,7 +353,7 @@ class BTCTader:
             if position is not None:
                 # 同向信号 → 加仓
                 if enable_add_position and signal == position["action"]:
-                    if is_ranging and strategy_version in ['improve2', 'improve_both']:
+                    if not allow_add:
                         pass
                     else:
                         add_size = balance * RISK_PERCENT / (atr * ATR_SL / price)
@@ -582,7 +615,7 @@ def main():
     parser = argparse.ArgumentParser(description="BTC TradingAgents Trader")
     parser.add_argument("--backtest", action="store_true", help="运行回测")
     parser.add_argument("--days", type=int, default=30, help="回测天数")
-    parser.add_argument("--version", type=str, default='original', choices=['original', 'improve1', 'improve2', 'improve_both'], help="策略版本")
+    parser.add_argument("--version", type=str, default='original', choices=['original', 'improve1', 'improve2', 'improve_both', 'dynamic', 'moderate'], help="策略版本")
     parser.add_argument("--quarter", type=str, choices=['Q1','Q2','Q3','Q4'], help="按季度测试")
     parser.add_argument("--once", action="store_true", help="运行一次分析并执行")
     
