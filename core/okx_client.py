@@ -12,14 +12,16 @@ from datetime import datetime, timezone
 from typing import List, Optional, Dict
 from config import Config
 
+load_dotenv = lambda: None
+
 
 class OKXClient:
     def __init__(self, config: type = Config):
         self.config = config
         self.base_url = "https://www.okx.com"
-        self.api_key = config.OKX_API_KEY
-        self.secret_key = config.OKX_SECRET_KEY
-        self.passphrase = config.OKX_PASSPHRASE
+        self.api_key = os.getenv("OKX_API_KEY", "") or config.OKX_API_KEY
+        self.secret_key = os.getenv("OKX_SECRET_KEY", "") or config.OKX_SECRET_KEY
+        self.passphrase = os.getenv("OKX_PASSPHRASE", "") or config.OKX_PASSPHRASE
     
     def _sign(self, timestamp: str, method: str, path: str, body: str = "") -> str:
         message = timestamp + method + path + body
@@ -36,8 +38,12 @@ class OKXClient:
         query = ""
         body = ""
         if params:
-            query = "?" + "&".join([f"{k}={v}" for k, v in params.items()])
-            url += query
+            if method == "GET":
+                query = "?" + "&".join([f"{k}={v}" for k, v in params.items()])
+                url += query
+            else:
+                import json
+                body = json.dumps(params)
         
         sign = self._sign(timestamp, method, path + query, body)
         
@@ -58,7 +64,7 @@ class OKXClient:
             if method == "GET":
                 response = requests.get(url, headers=headers, timeout=15, proxies=proxies)
             else:
-                response = requests.post(url, headers=headers, json=params, timeout=15, proxies=proxies)
+                response = requests.post(url, headers=headers, data=body, timeout=15, proxies=proxies)
             if response.status_code != 200:
                 return {"code": "-1", "msg": f"HTTP {response.status_code}: {response.text}"}
             return response.json()
@@ -77,6 +83,44 @@ class OKXClient:
                         "balance": float(bal.get("cashBal", 0))
                     }
         return None
+    
+    def transfer(self, currency: str, amount: float, side: str) -> Dict:
+        """资金划转 (统一账户模式)
+        side: 
+            - ccy_to_futures: 资金账户 -> 交易账户
+            - futures_to_ccy: 交易账户 -> 资金账户
+        """
+        type_map = {
+            "ccy_to_futures": "0",  # 资金账户 -> 交易账户
+            "futures_to_ccy": "0"    # 交易账户 -> 资金账户
+        }
+        
+        trans_type = type_map.get(side, "0")
+        
+        # 统一账户模式: from=18(交易账户), to=6(资金账户)
+        # 旧版API: from=18(币币), to=19(合约)
+        if side == "ccy_to_futures":
+            # 资金账户 -> 交易账户
+            params = {
+                "ccy": currency,
+                "amt": str(amount),
+                "type": trans_type,
+                "from": "6",  # 资金账户
+                "to": "18"    # 交易账户(统一账户)
+            }
+        else:
+            # 交易账户 -> 资金账户
+            params = {
+                "ccy": currency,
+                "amt": str(amount),
+                "type": trans_type,
+                "from": "18",  # 交易账户(统一账户)
+                "to": "6"      # 资金账户
+            }
+        
+        print(f"划转参数: {params}")
+        data = self._request("POST", "/api/v5/asset/transfer", params)
+        return data
     
     def get_position(self) -> Optional[Dict]:
         """获取当前持仓"""

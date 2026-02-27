@@ -28,6 +28,10 @@
   - `BacktestExecutor` - 回测执行器
   - `LiveExecutor` - 实盘执行器
 
+### 新增功能
+- 资金划转支持（统一账户模式）
+- 修复API签名问题
+
 ### 核心特性
 - 趋势判断: MA20斜率
 - 技术指标: RSI/MACD/布林带/ATR/ADX
