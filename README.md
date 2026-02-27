@@ -142,7 +142,7 @@ python main.py --once
 ```env
 # OKX API（实盘必需）
 OKX_API_KEY=your_api_key
-OKX_SECRET=your_secret
+OKX_SECRET_KEY=your_secret_key
 OKX_PASSPHRASE=your_passphrase
 
 # 模拟盘/回测（可选）
@@ -151,9 +151,22 @@ OKX_PAPER_TRADING=true
 # Telegram通知（可选）
 TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
+
+# 交易配置
+DRY_RUN=false           # false=实盘, true=模拟
+POSITION_SIZE=10         # 仓位大小(USDT)
+LEVERAGE=10             # 杠杆倍数
 ```
 
-### 6. 目录结构
+### 6. OKX API 权限要求
+
+| 权限 | 说明 |
+|------|------|
+| 交易 (trade) | 必需 |
+| 读取 (read_only) | 必需 |
+| 资金划转 | 可选（自动划转需要）|
+
+### 7. 目录结构
 
 ```
 Equilibrium/
