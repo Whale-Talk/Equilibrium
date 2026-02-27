@@ -44,16 +44,9 @@ class BTCTader:
     
     def run_analysis(self, force: bool = False):
         now = datetime.now()
-        current_hour = now.hour
         
-        should_run = False
-        if force:
-            should_run = True
-        elif current_hour % self.analysis_interval_hours == 0:
-            last_time = self.last_analysis_time.get("periodic")
-            if not last_time or (now - last_time).total_seconds() > 3600 * self.analysis_interval_hours:
-                should_run = True
-        
+        # 与回测一致：每次调用都检查信号（每小时一次）
+        should_run = True
         if not should_run:
             return None
         
@@ -656,13 +649,13 @@ class BTCTader:
         
         scheduler = BlockingScheduler()
         
+        # 每小时获取K线数据
         scheduler.add_job(self.fetch_and_store_data, 'interval', hours=1, id="fetch_data")
         
-        scheduler.add_job(
-            self.run_analysis, 'cron', hour='0,4,8,12,16,20', id="analysis",
-            minute=0
-        )
+        # 每小时分析信号（与回测一致：每根K线都检查）
+        scheduler.add_job(self.run_analysis, 'interval', hours=1, id="analysis")
         
+        # 每5分钟检查持仓
         scheduler.add_job(self.check_positions, 'interval', minutes=5, id="check_positions")
         
         print("调度器已启动，按Ctrl+C退出")
