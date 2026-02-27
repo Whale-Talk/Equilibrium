@@ -190,6 +190,8 @@ class BTCTader:
         RISK_PERCENT = 0.02  # 单笔风险2%
         TRAILING_ATR = 1.0  # 移动止损触发阈值
         BASE_BALANCE = 100.0  # 每月提取后的基础余额
+        MM_RATE = 0.005  # 维持保证金率 (0.5%)
+        LIQ_PENALTY = 0.9  # 爆仓后剩余比例
         
         print(f"开始回测 (最近 {days} 天)")
         print(f"参数: 持仓{max_hours}h 杠杆{leverage}x | ATR_SL={ATR_SL}")
@@ -358,9 +360,24 @@ class BTCTader:
                     else:
                         add_size = balance * RISK_PERCENT / (atr * ATR_SL / price)
                         add_size = max(5, min(add_size, balance * 0.3))
-                        position["position_size"] = position.get("position_size", 0) + add_size
+                        
+                        # 更新平均成本价（仅用于爆仓计算）
+                        old_size = position["position_size"]
+                        avg_price = position.get("avg_price", position["price"])
+                        new_size = old_size + add_size
+                        new_avg_price = (old_size * avg_price + add_size * price) / new_size
+                        
+                        position["position_size"] = new_size
+                        position["avg_price"] = new_avg_price  # 仅用于爆仓计算
                         position["add_count"] = position.get("add_count", 0) + 1
-                        print(f"[回测] ➕ 加仓 @ ${price:.2f} | 仓位: ${position['position_size']:.2f}", flush=True)
+                        
+                        # 重新计算爆仓价
+                        if position["action"] == "buy":
+                            position["liq_price"] = new_avg_price * (1 - 1/leverage + MM_RATE)
+                        else:
+                            position["liq_price"] = new_avg_price * (1 + 1/leverage - MM_RATE)
+                        
+                        print(f"[回测] ➕ 加仓 @ ${price:.2f} | 仓位: ${new_size:.2f} | 爆仓: ${position['liq_price']:.2f}", flush=True)
                 
                 # 反向信号 → 平仓
                 elif signal != "hold" and signal != position["action"]:
@@ -388,6 +405,9 @@ class BTCTader:
                 take_profit_tp1 = price + (price - stop_loss) * 1.5  # 第一档止盈1.5倍
                 take_profit_tp2 = price + (price - stop_loss) * 3.0  # 第二档止盈3倍
                 
+                # 计算爆仓价格 (多头)
+                liq_price = price * (1 - 1/leverage + MM_RATE)
+                
                 position = {
                     "action": "buy", 
                     "price": price, 
@@ -399,15 +419,20 @@ class BTCTader:
                     "atr": atr,
                     "trailing_stop": stop_loss,  # 移动止损
                     "tp1_hit": False,
-                    "position_size": position_size
+                    "position_size": position_size,
+                    "liq_price": liq_price,  # 爆仓价格
+                    "avg_price": price  # 平均成本价（仅用于爆仓计算）
                 }
-                trades.append({"action": "buy", "price": price, "type": "open", "rsi": rsi, "sl": stop_loss, "tp1": take_profit_tp1, "tp2": take_profit_tp2, "size": position_size})
-                print(f"[回测] 开多 @ ${price:.2f} | RSI: {rsi:.2f} | 仓位: ${position_size:.2f} | 止损: ${stop_loss:.2f} | 止盈1: ${take_profit_tp1:.2f} | 止盈2: ${take_profit_tp2:.2f}", flush=True)
+                trades.append({"action": "buy", "price": price, "type": "open", "rsi": rsi, "sl": stop_loss, "tp1": take_profit_tp1, "tp2": take_profit_tp2, "size": position_size, "liq": liq_price})
+                print(f"[回测] 开多 @ ${price:.2f} | RSI: {rsi:.2f} | 仓位: ${position_size:.2f} | 止损: ${stop_loss:.2f} | 止盈1: ${take_profit_tp1:.2f} | 止盈2: ${take_profit_tp2:.2f} | 爆仓: ${liq_price:.2f}", flush=True)
             
             elif signal == "sell" and position is None:
                 stop_loss = bb_upper + atr * ATR_SL
                 take_profit_tp1 = price - (stop_loss - price) * 1.5
                 take_profit_tp2 = price - (stop_loss - price) * 3.0
+                
+                # 计算爆仓价格 (空头)
+                liq_price = price * (1 + 1/leverage - MM_RATE)
                 
                 position = {
                     "action": "sell", 
@@ -420,10 +445,12 @@ class BTCTader:
                     "atr": atr,
                     "trailing_stop": stop_loss,
                     "tp1_hit": False,
-                    "position_size": position_size
+                    "position_size": position_size,
+                    "liq_price": liq_price,  # 爆仓价格
+                    "avg_price": price  # 平均成本价（仅用于爆仓计算）
                 }
-                trades.append({"action": "sell", "price": price, "type": "open", "rsi": rsi, "sl": stop_loss, "tp1": take_profit_tp1, "tp2": take_profit_tp2, "size": position_size})
-                print(f"[回测] 开空 @ ${price:.2f} | RSI: {rsi:.2f} | 仓位: ${position_size:.2f} | 止损: ${stop_loss:.2f} | 止盈1: ${take_profit_tp1:.2f} | 止盈2: ${take_profit_tp2:.2f}", flush=True)
+                trades.append({"action": "sell", "price": price, "type": "open", "rsi": rsi, "sl": stop_loss, "tp1": take_profit_tp1, "tp2": take_profit_tp2, "size": position_size, "liq": liq_price})
+                print(f"[回测] 开空 @ ${price:.2f} | RSI: {rsi:.2f} | 仓位: ${position_size:.2f} | 止损: ${stop_loss:.2f} | 止盈1: ${take_profit_tp1:.2f} | 止盈2: ${take_profit_tp2:.2f} | 爆仓: ${liq_price:.2f}", flush=True)
             
             elif position is not None:
                 if position["action"] == "buy":
@@ -431,6 +458,7 @@ class BTCTader:
                     hit_sl = price <= position["trailing_stop"]
                     hit_tp1 = price >= position["take_profit_tp1"] and not position["tp1_hit"]
                     hit_tp2 = position["tp1_hit"] and price >= position["take_profit_tp2"]
+                    hit_liq = price <= position["liq_price"]  # 爆仓检查
                     
                     # 移动止损：当价格向有利方向移动2xATR时，移到保本
                     if not position["tp1_hit"] and price >= position["price"] + position["atr"] * TRAILING_ATR:
@@ -442,24 +470,31 @@ class BTCTader:
                     hit_sl = price >= position["trailing_stop"]
                     hit_tp1 = price <= position["take_profit_tp1"] and not position["tp1_hit"]
                     hit_tp2 = position["tp1_hit"] and price <= position["take_profit_tp2"]
+                    hit_liq = price >= position["liq_price"]  # 爆仓检查
                     
                     if not position["tp1_hit"] and price <= position["price"] - position["atr"] * TRAILING_ATR:
                         position["trailing_stop"] = position["price"]
                         position["tp1_hit"] = True
                         print(f"[回测] 移动止损触发 @ ${price:.2f} | 止损移至: ${position['price']:.2f}", flush=True)
                 
-                should_close = hit_tp2 or hit_sl or (i - position["entry_idx"]) >= dynamic_max_hours
+                should_close = hit_tp2 or hit_sl or hit_liq or (i - position["entry_idx"]) >= dynamic_max_hours
                 
                 # 第一档止盈后继续持有但止损移到保本
-                if hit_tp1 and not hit_sl and (i - position["entry_idx"]) < dynamic_max_hours:
+                if hit_tp1 and not hit_sl and not hit_liq and (i - position["entry_idx"]) < dynamic_max_hours:
                     position["tp1_hit"] = True
                     position["stop_loss"] = position["price"]  # 移动止损到保本
                     print(f"[回测] ✅ 第一档止盈 @ ${price:.2f} | 继续持有 | 止损移至保本", flush=True)
                     continue
                 
                 if should_close:
-                    pnl = position["position_size"] * pnl_pct
-                    balance += pnl
+                    # 爆仓处理
+                    if hit_liq:
+                        pnl = -position["position_size"] * LIQ_PENALTY  # 爆仓损失90%仓位
+                        balance += pnl
+                        print(f"[回测] 💥 爆仓 @ ${price:.2f} | 盈亏: ${pnl:.2f} | 余额: ${balance:.2f}", flush=True)
+                    else:
+                        pnl = position["position_size"] * pnl_pct
+                        balance += pnl
                     daily_returns.append(pnl / balance if balance > 0 else 0)
                     
                     if balance > max_balance:
@@ -472,8 +507,10 @@ class BTCTader:
                     
                     trades.append({"action": position["action"], "price": price, "pnl": pnl, "type": "close"})
                     
-                    emoji = "✅" if pnl >= 0 else "❌"
-                    if hit_tp2:
+                    emoji = "✅" if pnl >= 0 else "💥" if hit_liq else "❌"
+                    if hit_liq:
+                        reason = "爆仓"
+                    elif hit_tp2:
                         reason = "第二档止盈"
                     elif hit_tp1:
                         reason = "第一档止盈"
