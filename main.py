@@ -164,13 +164,11 @@ class BTCTader:
         if position:
             # 有持仓：检查是否加仓或反向平仓
             if signal.get("action") == position["action"]:
-                # 同向信号：加仓
-                add_count = self.trade_executor.get_add_count()
-                if add_count < 3:  # 最多加仓3次
-                    current_price = self.okx_client.get_current_price()
-                    if current_price:
-                        amount = self.config.POSITION_SIZE * 0.3  # 加仓30%
-                        self.trade_executor.add_position(current_price, amount)
+                # 同向信号：加仓（不限制次数，与回测一致）
+                current_price = self.okx_client.get_current_price()
+                if current_price:
+                    amount = self.config.POSITION_SIZE * 0.3  # 加仓30%
+                    self.trade_executor.add_position(current_price, amount)
             else:
                 # 反向信号：平仓
                 current_price = self.okx_client.get_current_price()

@@ -68,8 +68,7 @@ class TradeExecutor:
         if not self.position or not self.enable_add_position:
             return False
         
-        if self.add_count >= 3:  # 最多加仓3次
-            return False
+        # 不限制加仓次数（与回测一致）
         
         old_amount = self.position["amount"]
         old_price = self.position["entry_price"]
