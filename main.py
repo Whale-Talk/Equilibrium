@@ -374,7 +374,7 @@ class BTCTader:
             
             # ========== 处理持仓 ==========
             if position is not None:
-                # 同向信号 → 加仓
+                # 同向信号 → 加仓（不限制次数）
                 if enable_add_position and signal == position["action"]:
                     if not allow_add:
                         pass
