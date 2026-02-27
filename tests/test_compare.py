@@ -2,7 +2,7 @@ import sys
 import os
 import numpy as np
 from datetime import datetime
-sys.path.insert(0, '/home/mjy/AI量化/BTC3.0')
+sys.path.insert(0, '/home/mjy/AI量化/Equilibrium')
 
 os.environ['http_proxy'] = 'http://127.0.0.1:7897'
 os.environ['https_proxy'] = 'http://127.0.0.1:7897'

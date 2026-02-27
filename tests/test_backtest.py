@@ -1,5 +1,5 @@
 import sys
-sys.path.insert(0, '/home/mjy/AI量化/BTC3.0')
+sys.path.insert(0, '/home/mjy/AI量化/Equilibrium')
 from core.data_manager import DataManager
 from utils.indicators import calculate_all_indicators
 from datetime import datetime

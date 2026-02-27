@@ -7,7 +7,7 @@ from config import Config
 
 
 class TradingAgent:
-    """简单指标策略 - 用于BTC3.0实盘"""
+    """简单指标策略 - 用于Equilibrium实盘"""
     
     def __init__(self, config: type = Config):
         self.config = config

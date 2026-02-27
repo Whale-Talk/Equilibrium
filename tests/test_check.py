@@ -1,5 +1,5 @@
 import sys
-sys.path.insert(0, '/home/mjy/AI量化/BTC3.0')
+sys.path.insert(0, '/home/mjy/AI量化/Equilibrium')
 
 import sqlite3
 import pandas as pd
