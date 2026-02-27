@@ -1,0 +1,23 @@
+# 密钥文件
+.env
+密钥.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 数据
+data/
+*.db
+*.sqlite
