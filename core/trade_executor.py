@@ -18,14 +18,19 @@ class TradeExecutor:
         self.total_withdrawn = 0
         self.last_withdraw_month = None
         self.position = None
+        self.max_hours = 12  # 持仓超时时间
+        self.enable_add_position = True  # 加仓开关
+        self.add_count = 0  # 加仓次数
     
     def open_position(self, action: str, price: float, amount: float, 
                      leverage: int, reason: str = "",
-                     stop_loss: float = None, take_profit: float = None) -> bool:
+                     stop_loss: float = None, take_profit_tp1: float = None, 
+                     take_profit_tp2: float = None, atr: float = None) -> bool:
         if self.config.DRY_RUN:
             sl_info = f", 止损: ${stop_loss:.2f}" if stop_loss else ""
-            tp_info = f", 止盈: ${take_profit:.2f}" if take_profit else ""
-            print(f"[DRY RUN] {'买入' if action == 'buy' else '卖出'} {amount} USDT @ ${price}, 杠杆: {leverage}x{sl_info}{tp_info}")
+            tp1_info = f", 止盈1: ${take_profit_tp1:.2f}" if take_profit_tp1 else ""
+            tp2_info = f", 止盈2: ${take_profit_tp2:.2f}" if take_profit_tp2 else ""
+            print(f"[DRY RUN] {'买入' if action == 'buy' else '卖出'} {amount} USDT @ ${price}, 杠杆: {leverage}x{sl_info}{tp1_info}{tp2_info}")
         
         self.position = {
             "action": action,
@@ -34,9 +39,16 @@ class TradeExecutor:
             "leverage": leverage,
             "reason": reason,
             "stop_loss": stop_loss,
-            "take_profit": take_profit,
-            "timestamp": datetime.now().timestamp()
+            "trailing_stop": stop_loss,  # 移动止损
+            "take_profit_tp1": take_profit_tp1,
+            "take_profit_tp2": take_profit_tp2,
+            "tp1_hit": False,
+            "atr": atr,
+            "entry_time": datetime.now(),
+            "add_count": 0,
+            "add_prices": []
         }
+        self.add_count = 0
         
         self.data_manager.save_trade(
             action=action,
@@ -48,6 +60,30 @@ class TradeExecutor:
         )
         
         self.notification.send_trade_signal(action, price, amount, leverage, reason)
+        
+        return True
+    
+    def add_position(self, price: float, amount: float) -> bool:
+        """加仓"""
+        if not self.position or not self.enable_add_position:
+            return False
+        
+        if self.add_count >= 3:  # 最多加仓3次
+            return False
+        
+        old_amount = self.position["amount"]
+        old_price = self.position["entry_price"]
+        new_amount = old_amount + amount
+        new_price = (old_amount * old_price + amount * price) / new_amount
+        
+        self.position["amount"] = new_amount
+        self.position["entry_price"] = new_price
+        self.position["add_count"] = self.position.get("add_count", 0) + 1
+        self.position["add_prices"].append(price)
+        self.add_count = self.position["add_count"]
+        
+        if self.config.DRY_RUN:
+            print(f"[DRY RUN] ➕ 加仓 @ ${price:.2f}, 仓位: ${new_amount:.2f}")
         
         return True
     
@@ -68,7 +104,7 @@ class TradeExecutor:
         self.balance += pnl
         
         if self.config.DRY_RUN:
-            print(f"[DRY RUN] 平仓 @ ${close_price}, 盈亏: ${pnl:.2f}")
+            print(f"[DRY RUN] 平仓 @ ${close_price}, 盈亏: ${pnl:.2f}, 原因: {reason}")
         
         self.data_manager.save_trade(
             action=f"close_{action}",
@@ -81,67 +117,83 @@ class TradeExecutor:
         )
         
         self.data_manager.save_balance(self.balance, f"close_{action}")
-        self.notification.send_trade_result(action, close_price, pnl, "closed")
+        self.notification.send_trade_result(action, close_price, pnl, reason)
         
         self.position = None
+        self.add_count = 0
         
         return pnl
     
     def check_stop_loss(self, current_price: float) -> bool:
+        """检查止损（含移动止损）"""
         if not self.position:
             return False
         
-        entry_price = self.position["entry_price"]
         action = self.position["action"]
-        ai_stop_loss = self.position.get("stop_loss")
+        trailing_stop = self.position.get("trailing_stop")
         
-        # 优先使用AI给出的止损价格
-        if ai_stop_loss:
-            if action == "buy" and current_price <= ai_stop_loss:
-                self.close_position(current_price, f"止损 @ ${ai_stop_loss:.2f}")
+        # 检查移动止损
+        if trailing_stop:
+            if action == "buy" and current_price <= trailing_stop:
+                self.close_position(current_price, "止损")
                 return True
-            elif action == "sell" and current_price >= ai_stop_loss:
-                self.close_position(current_price, f"止损 @ ${ai_stop_loss:.2f}")
-                return True
-        else:
-            # 使用配置文件中的默认值
-            if action == "buy":
-                loss_ratio = (entry_price - current_price) / entry_price
-            else:
-                loss_ratio = (current_price - entry_price) / entry_price
-            
-            if loss_ratio >= self.config.STOP_LOSS_RATIO:
+            elif action == "sell" and current_price >= trailing_stop:
                 self.close_position(current_price, "止损")
                 return True
         
         return False
     
     def check_take_profit(self, current_price: float) -> bool:
+        """检查分批止盈"""
         if not self.position:
             return False
         
-        entry_price = self.position["entry_price"]
         action = self.position["action"]
-        ai_take_profit = self.position.get("take_profit")
+        entry_price = self.position["entry_price"]
+        tp1 = self.position.get("take_profit_tp1")
+        tp2 = self.position.get("take_profit_tp2")
+        tp1_hit = self.position.get("tp1_hit", False)
         
-        # 优先使用AI给出的止盈价格
-        if ai_take_profit:
-            if action == "buy" and current_price >= ai_take_profit:
-                self.close_position(current_price, f"止盈 @ ${ai_take_profit:.2f}")
+        # 第一档止盈
+        if not tp1_hit and tp1:
+            if action == "buy" and current_price >= tp1:
+                self.position["tp1_hit"] = True
+                self.position["trailing_stop"] = entry_price  # 移动止损到保本
+                if self.config.DRY_RUN:
+                    print(f"[DRY RUN] ✅ 第一档止盈触发, 止损移至保本")
                 return True
-            elif action == "sell" and current_price <= ai_take_profit:
-                self.close_position(current_price, f"止盈 @ ${ai_take_profit:.2f}")
+            elif action == "sell" and current_price <= tp1:
+                self.position["tp1_hit"] = True
+                self.position["trailing_stop"] = entry_price
+                if self.config.DRY_RUN:
+                    print(f"[DRY RUN] ✅ 第一档止盈触发, 止损移至保本")
                 return True
-        else:
-            # 使用配置文件中的默认值
-            if action == "buy":
-                profit_ratio = (current_price - entry_price) / entry_price
-            else:
-                profit_ratio = (entry_price - current_price) / entry_price
-            
-            if profit_ratio >= self.config.TAKE_PROFIT_RATIO:
-                self.close_position(current_price, "止盈")
+        
+        # 第二档止盈
+        if tp1_hit and tp2:
+            if action == "buy" and current_price >= tp2:
+                self.close_position(current_price, "第二档止盈")
                 return True
+            elif action == "sell" and current_price <= tp2:
+                self.close_position(current_price, "第二档止盈")
+                return True
+        
+        return False
+    
+    def check_timeout(self, current_price: float) -> bool:
+        """检查持仓超时"""
+        if not self.position:
+            return False
+        
+        entry_time = self.position.get("entry_time")
+        if not entry_time:
+            return False
+        
+        hours_held = (datetime.now() - entry_time).total_seconds() / 3600
+        
+        if hours_held >= self.max_hours:
+            self.close_position(current_price, f"超时({int(hours_held)}h)")
+            return True
         
         return False
     
@@ -180,3 +232,9 @@ class TradeExecutor:
             return withdrawn
         
         return None
+    
+    def get_add_count(self) -> int:
+        """获取加仓次数"""
+        if self.position:
+            return self.position.get("add_count", 0)
+        return 0

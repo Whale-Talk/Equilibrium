@@ -95,23 +95,27 @@ class BTCTader:
         bb_lower = latest.get('bb_lower', current_price * 0.98)
         bb_upper = latest.get('bb_upper', current_price * 1.02)
         atr = latest.get('atr', current_price * 0.02)
-        atr_sl = 1.5  # 止损ATR倍数
+        atr_sl = 2.0  # 止损ATR倍数
         
         if signal == "buy":
             stop_loss = bb_lower - atr * atr_sl
-            take_profit = current_price + (current_price - stop_loss) * 2.5
+            take_profit_tp1 = current_price + (current_price - stop_loss) * 1.5  # 第一档止盈1.5倍
+            take_profit_tp2 = current_price + (current_price - stop_loss) * 3.0  # 第二档止盈3倍
         else:
             stop_loss = bb_upper + atr * atr_sl
-            take_profit = current_price - (stop_loss - current_price) * 2.5
+            take_profit_tp1 = current_price - (stop_loss - current_price) * 1.5
+            take_profit_tp2 = current_price - (stop_loss - current_price) * 3.0
         
         print(f"信号: {signal} | 价格: ${current_price:.2f} | RSI: {rsi:.2f}")
-        print(f"止损: ${stop_loss:.2f} | 止盈: ${take_profit:.2f}")
+        print(f"止损: ${stop_loss:.2f} | 止盈1: ${take_profit_tp1:.2f} | 止盈2: ${take_profit_tp2:.2f}")
         
         return {
             "action": signal,
             "confidence": 0.8,
             "stop_loss": stop_loss,
-            "take_profit": take_profit,
+            "take_profit_tp1": take_profit_tp1,
+            "take_profit_tp2": take_profit_tp2,
+            "atr": atr,
             "reason": f"指标信号: RSI={rsi:.2f}",
             "approved": True
         }
@@ -121,9 +125,14 @@ class BTCTader:
         if not current_price:
             return
         
-        if self.trade_executor.get_position():
+        position = self.trade_executor.get_position()
+        if position:
+            # 检查止损（含移动止损）
             self.trade_executor.check_stop_loss(current_price)
+            # 检查分批止盈
             self.trade_executor.check_take_profit(current_price)
+            # 检查持仓超时
+            self.trade_executor.check_timeout(current_price)
         else:
             self.trade_executor.check_and_withdraw_profit()
     
@@ -143,8 +152,23 @@ class BTCTader:
             print(f"置信度太低: {confidence}")
             return
         
-        if self.trade_executor.get_position():
-            print("已有持仓")
+        position = self.trade_executor.get_position()
+        
+        if position:
+            # 有持仓：检查是否加仓或反向平仓
+            if signal.get("action") == position["action"]:
+                # 同向信号：加仓
+                add_count = self.trade_executor.get_add_count()
+                if add_count < 3:  # 最多加仓3次
+                    current_price = self.okx_client.get_current_price()
+                    if current_price:
+                        amount = self.config.POSITION_SIZE * 0.3  # 加仓30%
+                        self.trade_executor.add_position(current_price, amount)
+            else:
+                # 反向信号：平仓
+                current_price = self.okx_client.get_current_price()
+                if current_price:
+                    self.trade_executor.close_position(current_price, "反向信号")
             return
         
         current_price = self.okx_client.get_current_price()
@@ -156,7 +180,9 @@ class BTCTader:
         leverage = min(signal.get("leverage", 10), self.config.MAX_LEVERAGE)
         reason = signal.get("reason", "")
         stop_loss = signal.get("stop_loss")
-        take_profit = signal.get("take_profit")
+        take_profit_tp1 = signal.get("take_profit_tp1")
+        take_profit_tp2 = signal.get("take_profit_tp2")
+        atr = signal.get("atr")
         
         self.trade_executor.open_position(
             action=action,
@@ -165,7 +191,9 @@ class BTCTader:
             leverage=leverage,
             reason=reason[:500],
             stop_loss=stop_loss,
-            take_profit=take_profit
+            take_profit_tp1=take_profit_tp1,
+            take_profit_tp2=take_profit_tp2,
+            atr=atr
         )
     
     def run_backtest(self, days: int = 30, max_hours: int = 12, leverage: int = 10, 
