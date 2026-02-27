@@ -19,6 +19,8 @@ from core.data_manager import DataManager
 from core.notification import NotificationManager
 from core.trade_executor import TradeExecutor
 from core.btc_trading_agents import TradingAgent
+from core.trader import Trader
+from core.executor import BacktestExecutor, LiveExecutor
 from utils.indicators import calculate_all_indicators, get_indicator_summary
 
 
@@ -29,6 +31,11 @@ class BTCTader:
         self.data_manager = DataManager()
         self.notification = NotificationManager(config)
         self.trade_executor = TradeExecutor(config, self.data_manager, self.notification)
+        
+        # V3 架构
+        self.backtest_executor = None
+        self.trader = None
+        self.live_executor = None
         
         self.last_analysis_time = {}
         self.analysis_interval_hours = 4
@@ -693,6 +700,134 @@ class BTCTader:
         except (KeyboardInterrupt, SystemExit):
             print("\n系统退出")
 
+    def run_backtest_v3(self, days: int = 30, strategy_version: str = 'moderate'):
+        """V3架构回测 - 使用统一的Trader + BacktestExecutor"""
+        import pandas as pd
+        from datetime import datetime
+        
+        print(f"\n=== V3架构回测 ({days}天) ===")
+        
+        # 初始化V3组件
+        self.backtest_executor = BacktestExecutor(initial_balance=100.0)
+        self.trader = Trader(self.config, self.backtest_executor)
+        self.trader.enable_add_position = True
+        self.trader.max_add_count = 999  # 不限制加仓次数
+        
+        # 获取数据
+        hours_needed = days * 24 + 50
+        self.fetch_and_store_data()
+        klines = self.data_manager.get_klines("1h", hours_needed)
+        
+        if klines.empty:
+            print("没有K线数据")
+            return None
+        
+        klines = klines.sort_values('timestamp').reset_index(drop=True)
+        if len(klines) > hours_needed:
+            klines = klines.iloc[-hours_needed:].reset_index(drop=True)
+        
+        print(f"[V3回测] K线: {len(klines)}条")
+        
+        df = calculate_all_indicators(klines)
+        
+        # 初始化价格变量
+        current_price = df.iloc[-1]['close'] if not df.empty else 0
+        
+        # 逐K线回测
+        for i in range(50, len(df)):
+            current_bar = df.iloc[i]
+            current_price = current_bar['close']
+            timestamp = current_bar['timestamp']
+            
+            # 获取前i根K线用于分析
+            df_history = df.iloc[:i+1]
+            
+            # 检查持仓
+            position_action = self.backtest_executor.get_position()
+            
+            if position_action:
+                # 有持仓：检查是否需要平仓或加仓
+                check_result = self.trader.check_position(df_history, current_price)
+                
+                if check_result:
+                    action = check_result.get("action")
+                    
+                    if action == "close":
+                        reason = check_result.get("reason", "平仓")
+                        pnl = self.backtest_executor.close_position(current_price, reason)
+                        if pnl and pnl > 0:
+                            print(f"✅ 平仓 @ ${current_price:.2f} | 盈亏: ${pnl:.2f}")
+                        elif pnl:
+                            print(f"❌ 平仓 @ ${current_price:.2f} | 盈亏: ${pnl:.2f}")
+                    
+                    elif action == "take_profit_1":
+                        # 第一档止盈：更新移动止损
+                        new_ts = check_result.get("new_trailing_stop")
+                        if new_ts:
+                            self.backtest_executor.update_position({
+                                "tp1_hit": True,
+                                "trailing_stop": new_ts
+                            })
+                            print(f"🎯 第一档止盈 @ ${current_price:.2f} | 止损移至 ${new_ts:.2f}")
+                    
+                    elif action == "add":
+                        # 加仓（检查是否超过限制）
+                        current_add_count = position_action.get("add_count", 0)
+                        if current_add_count < self.trader.max_add_count:
+                            add_size = self.trader.calculate_add_size(current_price, position_action.get("atr", 0))
+                            self.backtest_executor.add_position(current_price, add_size)
+                            print(f"➕ 加仓 @ ${current_price:.2f} | 仓位: ${position_action.get('amount', 0) + add_size:.2f}")
+            else:
+                # 无持仓：分析信号
+                signal = self.trader.analyze(df_history, current_price, version=strategy_version)
+                
+                if signal and signal.get("approved"):
+                    action = signal.get("action")
+                    
+                    # 开仓
+                    if action in ["buy", "sell"]:
+                        position_size = signal.get("position_size", 10)
+                        leverage = 10
+                        
+                        self.backtest_executor.open_position(
+                            action=action,
+                            price=current_price,
+                            amount=position_size,
+                            leverage=leverage,
+                            stop_loss=signal.get("stop_loss"),
+                            tp1=signal.get("take_profit_tp1"),
+                            tp2=signal.get("take_profit_tp2"),
+                            atr=signal.get("atr"),
+                            reason=signal.get("reason", "")
+                        )
+                        
+                        print(f"📈 {'开多' if action == 'buy' else '开空'} @ ${current_price:.2f} | 仓位: ${position_size:.2f}")
+        
+        # 检查余额，余额为负则停止
+        if self.backtest_executor.get_balance() <= 0:
+            print(f"⚠️ 余额为负，停止交易")
+            self.backtest_executor.close_position(current_price, "余额不足")
+        
+        # 平掉所有持仓
+        final_price = df.iloc[-1]['close']
+        if self.backtest_executor.get_position():
+            pnl = self.backtest_executor.close_position(final_price, "回测结束")
+            if pnl:
+                print(f"📊 最终平仓 @ ${final_price:.2f} | 盈亏: ${pnl:.2f}")
+        
+        # 输出结果
+        result = self.backtest_executor.get_results()
+        
+        print(f"\n=== V3回测结果 ({strategy_version}) ===")
+        print(f"初始资金: ${result['initial_balance']:.2f}")
+        print(f"最终余额: ${result['final_balance']:.2f}")
+        print(f"累计提取: ${result['total_withdrawn']:.2f}")
+        print(f"总收益: ${result['total_return']:.2f} ({result['return_pct']:.2f}%)")
+        print(f"交易次数: {result['trades']}")
+        print(f"胜率: {result['win_rate']:.2f}%")
+        
+        return result
+
 
 def main():
     parser = argparse.ArgumentParser(description="BTC TradingAgents Trader")
@@ -707,6 +842,7 @@ def main():
     trader = BTCTader()
     
     if args.backtest:
+        # 使用原有回测逻辑（与V2.3一致）
         result = trader.run_backtest(args.days, strategy_version=args.version, quarter=args.quarter)
         
         if result:
