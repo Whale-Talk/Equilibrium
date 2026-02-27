@@ -6,6 +6,25 @@
 - **核心逻辑**（trader.py）- 信号分析、持仓管理
 - **执行层**（executor.py）- 回测/实盘分离
 
+## 项目结构
+
+```
+Equilibrium/
+├── main.py                    # 主入口
+├── config/
+│   └── config.py              # 配置
+├── core/                      # 核心模块
+│   ├── trader.py              # 核心交易逻辑 (V3)
+│   ├── executor.py            # 执行器接口 (V3)
+│   ├── okx_client.py          # OKX API客户端
+│   ├── trade_executor.py      # 交易执行器
+│   ├── data_manager.py        # 数据管理
+│   └── notification.py         # 通知
+├── utils/
+│   └── indicators.py          # 技术指标
+└── tests/                     # 测试
+```
+
 ## 核心特性
 
 - **趋势判断**: 基于MA20斜率判断市场趋势
