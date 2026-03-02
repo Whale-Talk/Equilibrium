@@ -21,6 +21,7 @@ from core.trade_executor import TradeExecutor
 from core.btc_trading_agents import TradingAgent
 from core.trader import Trader
 from core.executor import BacktestExecutor, LiveExecutor
+from core.logger import get_logger
 from utils.indicators import calculate_all_indicators, get_indicator_summary
 
 
@@ -31,6 +32,7 @@ class BTCTader:
         self.data_manager = DataManager()
         self.notification = NotificationManager(config)
         self.trade_executor = TradeExecutor(config, self.data_manager, self.notification)
+        self.logger = get_logger()
         
         # V3 架构
         self.backtest_executor = None
@@ -52,7 +54,6 @@ class BTCTader:
     def run_analysis(self, force: bool = False):
         now = datetime.now()
         
-        # 与回测一致：每次调用都检查信号（每小时一次）
         should_run = True
         if not should_run:
             return None
@@ -60,6 +61,7 @@ class BTCTader:
         self.last_analysis_time["periodic"] = now
         
         print(f"\n[{now}] 开始指标信号分析...")
+        self.logger.info(f"开始指标信号分析")
         
         klines_1h = self.data_manager.get_klines("1h", 100)
         if klines_1h.empty:
@@ -77,7 +79,6 @@ class BTCTader:
         
         latest = df_with_indicators.iloc[-1]
         
-        # 判断趋势
         if len(df_with_indicators) >= 24:
             ma20_prev = df_with_indicators.iloc[-24].get('ma20', current_price)
             ma20_now = latest.get('ma20', current_price)
@@ -92,22 +93,43 @@ class BTCTader:
         
         print(f"趋势判断: {trend}")
         
+        rsi = latest.get('rsi', 50)
+        macd = latest.get('macd', 0)
+        macd_signal = latest.get('macd_signal', 0)
+        adx = latest.get('adx', 0)
+        
+        # 
+        report_msg = f"""
+📊 *每小时分析报告*
+
+⏰ {now.strftime('%Y-%m-%d %H:%M')}
+💰 当前价格: ${current_price:,.2f}
+
+📈 指标:
+- RSI: {rsi:.2f}
+- MACD: {macd:.2f} (signal: {macd_signal:.2f})
+- ADX: {adx:.2f}
+- 趋势: {trend.upper()}
+
+📋 状态: 分析完成
+"""
+        self.notification.send_message(report_msg)
+        
         signal = self._simple_signal(latest, trend)
         
         if signal == "hold":
             print(f"信号: hold - 无交易信号")
             return None
         
-        rsi = latest.get('rsi', 50)
         bb_lower = latest.get('bb_lower', current_price * 0.98)
-        bb_upper = latest.get('bb_upper', current_price * 1.02)
+        bb_upper = latest.get('bb_upper', current_price * 0.98)
         atr = latest.get('atr', current_price * 0.02)
-        atr_sl = 2.0  # 止损ATR倍数
+        atr_sl = 2.0
         
         if signal == "buy":
             stop_loss = bb_lower - atr * atr_sl
-            take_profit_tp1 = current_price + (current_price - stop_loss) * 1.5  # 第一档止盈1.5倍
-            take_profit_tp2 = current_price + (current_price - stop_loss) * 3.0  # 第二档止盈3倍
+            take_profit_tp1 = current_price + (current_price - stop_loss) * 1.5
+            take_profit_tp2 = current_price + (current_price - stop_loss) * 3.0
         else:
             stop_loss = bb_upper + atr * atr_sl
             take_profit_tp1 = current_price - (stop_loss - current_price) * 1.5
@@ -688,6 +710,8 @@ class BTCTader:
         print(f"交易对: {self.config.TRADING_INSTRUMENT}")
         print("=" * 50)
         
+        self.logger.info(f"=== 系统启动 | 模式: {'模拟盘' if self.config.DRY_RUN else '实盘'} | 交易对: {self.config.TRADING_INSTRUMENT} ===")
+        
         # 发送启动存活消息
         from datetime import datetime
         start_time = datetime.now()
@@ -711,7 +735,6 @@ class BTCTader:
             msg = f"✅ *存活确认* ({label})\n\n启动后已运行 {elapsed.total_seconds():.0f} 秒\n系统正常运行中..."
             self.notification.send_message(msg)
         
-        # 启动定时存活消息线程
         threading.Thread(target=send_heartbeat, args=(10, "10秒")).start()
         threading.Thread(target=send_heartbeat, args=(60, "1分钟")).start()
         threading.Thread(target=send_heartbeat, args=(300, "5分钟")).start()
@@ -734,11 +757,13 @@ class BTCTader:
         scheduler.add_job(self.check_positions, 'interval', minutes=5, id="check_positions")
         
         print("调度器已启动，按Ctrl+C退出")
+        self.logger.info("调度器已启动")
         
         try:
             scheduler.start()
         except (KeyboardInterrupt, SystemExit):
             print("\n系统退出")
+            self.logger.info("系统退出")
 
     def run_backtest_v3(self, days: int = 30, strategy_version: str = 'moderate'):
         """V3架构回测 - 使用统一的Trader + BacktestExecutor"""
