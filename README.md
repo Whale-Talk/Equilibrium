@@ -93,6 +93,7 @@ core/executor.py (执行层)
 ### 1. 环境要求
 - Python 3.8+
 - SQLite
+- Windows / Linux / Mac
 
 ### 2. 快速部署
 
@@ -103,18 +104,50 @@ cd Equilibrium
 
 # 创建虚拟环境
 python3 -m venv venv
-source venv/bin/activate  # Linux/Mac
-# venv\Scripts\activate   # Windows
+call venv\Scripts\activate.bat  # Windows
+# source venv/bin/activate      # Linux/Mac
 
 # 安装依赖
 pip install -r requirements.txt
 
 # 配置环境变量
-cp .env.example .env
+copy .env.example .env
 # 编辑 .env 填入API密钥
 ```
 
-### 3. 运行模式
+### 3. Windows 24小时运行
+
+#### 方法1: 使用nssm（推荐）
+```powershell
+# 1. 下载nssm: https://nssm.cc/download
+# 2. 安装服务
+nssm install Equilibrium "C:\path\to\venv\Scripts\python.exe" "C:\path\to\Equilibrium\main.py" --live
+
+# 3. 启动服务
+nssm start Equilibrium
+```
+
+#### 方法2: 使用任务计划程序
+```powershell
+# 1. 创建批处理文件 run.bat
+@echo off
+cd /d C:\path\to\Equilibrium
+call venv\Scripts\activate.bat
+python main.py --live
+
+# 2. 添加计划任务（每5分钟检查）
+schtasks /create /tn "Equilibrium" /tr "C:\path\to\run.bat" /sc minute /mo 5
+```
+
+#### 方法3: 使用PM2 (需要WSL或Git Bash)
+```bash
+# 在Git Bash或WSL中运行
+pm2 start main.py -- --live
+pm2 save
+pm2 startup
+```
+
+### 4. 运行模式
 
 ```bash
 # 回测（指定天数）
@@ -129,7 +162,14 @@ python main.py --live
 python main.py --once
 ```
 
-### 4. 策略版本
+### 5. 实盘配置
+
+修改 `config/config.py`:
+```python
+DRY_RUN = False  # 改为False启用实盘
+```
+
+### 6. 策略版本
 
 | 版本 | 说明 |
 |------|------|
@@ -137,7 +177,7 @@ python main.py --once
 | `moderate` | 温和风控（推荐） |
 | `dynamic` | 动态切换 |
 
-### 5. 环境变量 (.env)
+### 6. 环境变量 (.env)
 
 ```env
 # OKX API（实盘必需）
@@ -158,7 +198,7 @@ POSITION_SIZE=10         # 仓位大小(USDT)
 LEVERAGE=10             # 杠杆倍数
 ```
 
-### 6. OKX API 权限要求
+### 7. OKX API 权限要求
 
 | 权限 | 说明 |
 |------|------|
