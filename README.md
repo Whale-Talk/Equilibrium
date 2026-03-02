@@ -147,6 +147,23 @@ pm2 save
 pm2 startup
 ```
 
+#### 方法4: Linux/WSL 后台运行
+
+```bash
+# 方法1: nohup（推荐简单）
+nohup python main.py --live > output.log 2>&1 &
+
+# 方法2: screen（可重新连接）
+screen -S trading
+python main.py --live
+# 按 Ctrl+A 然后按 D 退出screen
+
+# 方法3: tmux
+tmux new -s trading
+python main.py --live
+# 按 Ctrl+B 然后按 D 退出tmux
+```
+
 ### 4. 运行模式
 
 ```bash
