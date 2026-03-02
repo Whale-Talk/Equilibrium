@@ -3,15 +3,18 @@ from datetime import datetime
 from config import Config
 from core.data_manager import DataManager
 from core.notification import NotificationManager
+from core.okx_client import OKXClient
 
 
 class TradeExecutor:
     def __init__(self, config: type = Config, 
                  data_manager: DataManager = None,
-                 notification: NotificationManager = None):
+                 notification: NotificationManager = None,
+                 okx_client: OKXClient = None):
         self.config = config
         self.data_manager = data_manager or DataManager()
         self.notification = notification or NotificationManager(config)
+        self.okx_client = okx_client or OKXClient(config)
         self.balance = config.INITIAL_BALANCE
         self.base_balance = config.BASE_BALANCE
         self.withdraw_profit = config.WITHDRAW_PROFIT
@@ -26,7 +29,21 @@ class TradeExecutor:
                      leverage: int, reason: str = "",
                      stop_loss: float = None, take_profit_tp1: float = None, 
                      take_profit_tp2: float = None, atr: float = None) -> bool:
-        if self.config.DRY_RUN:
+        # 实盘下单
+        if not self.config.DRY_RUN:
+            order = {
+                'instId': 'BTC-USDT-SWAP',
+                'tdMode': 'isolated',
+                'side': action,
+                'ordType': 'market',
+                'sz': str(int(amount))
+            }
+            result = self.okx_client._request('POST', '/api/v5/trade/order', order)
+            if result.get('code') != '0':
+                print(f"开仓失败: {result}")
+                return False
+            print(f"实盘开仓成功: {action} {amount} USDT")
+        else:
             sl_info = f", 止损: ${stop_loss:.2f}" if stop_loss else ""
             tp1_info = f", 止盈1: ${take_profit_tp1:.2f}" if take_profit_tp1 else ""
             tp2_info = f", 止盈2: ${take_profit_tp2:.2f}" if take_profit_tp2 else ""
@@ -94,6 +111,23 @@ class TradeExecutor:
         entry_price = self.position["entry_price"]
         amount = self.position["amount"]
         leverage = self.position["leverage"]
+        
+        # 实盘平仓
+        if not self.config.DRY_RUN:
+            close_side = 'sell' if action == 'buy' else 'buy'
+            order = {
+                'instId': 'BTC-USDT-SWAP',
+                'tdMode': 'isolated',
+                'side': close_side,
+                'ordType': 'market',
+                'sz': str(int(amount)),
+                'posSide': 'net'
+            }
+            result = self.okx_client._request('POST', '/api/v5/trade/order', order)
+            if result.get('code') != '0':
+                print(f"平仓失败: {result}")
+                return None
+            print(f"实盘平仓成功: {close_side} {amount} USDT")
         
         if action == "buy":
             pnl = (close_price - entry_price) / entry_price * amount * leverage
