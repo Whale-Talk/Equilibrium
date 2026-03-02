@@ -11,8 +11,9 @@ import base64
 from datetime import datetime, timezone
 from typing import List, Optional, Dict
 from config import Config
+from dotenv import load_dotenv
 
-load_dotenv = lambda: None
+load_dotenv()
 
 
 class OKXClient:
