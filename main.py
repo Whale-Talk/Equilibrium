@@ -688,6 +688,34 @@ class BTCTader:
         print(f"交易对: {self.config.TRADING_INSTRUMENT}")
         print("=" * 50)
         
+        # 发送启动存活消息
+        from datetime import datetime
+        start_time = datetime.now()
+        start_msg = f"""
+🚀 *Equilibrium 交易系统已启动*
+
+⏰ 启动时间: {start_time.strftime('%Y-%m-%d %H:%M:%S')}
+📈 模式: {'模拟盘' if self.config.DRY_RUN else '实盘'}
+🪙 交易对: {self.config.TRADING_INSTRUMENT}
+
+程序正在运行，10秒/1分钟/5分钟后将发送确认消息...
+"""
+        self.notification.send_message(start_msg)
+        
+        import threading
+        import time
+        
+        def send_heartbeat(delay_seconds, label):
+            time.sleep(delay_seconds)
+            elapsed = datetime.now() - start_time
+            msg = f"✅ *存活确认* ({label})\n\n启动后已运行 {elapsed.total_seconds():.0f} 秒\n系统正常运行中..."
+            self.notification.send_message(msg)
+        
+        # 启动定时存活消息线程
+        threading.Thread(target=send_heartbeat, args=(10, "10秒")).start()
+        threading.Thread(target=send_heartbeat, args=(60, "1分钟")).start()
+        threading.Thread(target=send_heartbeat, args=(300, "5分钟")).start()
+        
         self.fetch_and_store_data()
         
         initial_signal = self.run_analysis(force=True)
