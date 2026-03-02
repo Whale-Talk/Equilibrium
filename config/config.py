@@ -34,7 +34,7 @@ class Config:
     
     # Telegram 通知
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+    TELEGRAM_CHAT_IDS = os.getenv("TELEGRAM_CHAT_IDS", "5750184219,6830843772").split(",")
     
     # Alpha Vantage
     ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "")

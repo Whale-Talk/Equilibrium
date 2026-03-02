@@ -7,26 +7,32 @@ class NotificationManager:
     def __init__(self, config: type = Config):
         self.config = config
         self.token = config.TELEGRAM_BOT_TOKEN
-        self.chat_id = config.TELEGRAM_CHAT_ID
+        self.chat_ids = config.TELEGRAM_CHAT_IDS if hasattr(config, 'TELEGRAM_CHAT_IDS') else [config.TELEGRAM_CHAT_ID]
     
     def send_message(self, message: str) -> bool:
-        if not self.token or not self.chat_id:
+        if not self.token or not self.chat_ids:
             print("Telegram not configured")
             return False
         
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-        data = {
-            "chat_id": self.chat_id,
-            "text": message,
-            "parse_mode": "Markdown"
-        }
         
-        try:
-            response = requests.post(url, json=data, timeout=10)
-            return response.status_code == 200
-        except Exception as e:
-            print(f"Failed to send telegram: {e}")
-            return False
+        success = True
+        for chat_id in self.chat_ids:
+            data = {
+                "chat_id": chat_id.strip(),
+                "text": message,
+                "parse_mode": "Markdown"
+            }
+            
+            try:
+                response = requests.post(url, json=data, timeout=10)
+                if response.status_code != 200:
+                    success = False
+            except Exception as e:
+                print(f"Failed to send telegram: {e}")
+                success = False
+        
+        return success
     
     def send_trade_signal(self, action: str, price: float, amount: float, 
                           leverage: int, reason: str) -> bool:
