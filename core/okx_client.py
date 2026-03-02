@@ -138,6 +138,42 @@ class OKXClient:
         return None
     
     def get_klines(self, interval: str, limit: int = 100) -> List[List]:
+        """获取K线数据，自动分页获取完整历史数据
+        
+        Args:
+            interval: K线周期 (1h, 4h, 1d)
+            limit: 需要获取的总数量
+            
+        Returns:
+            K线数据列表
+        """
+        all_klines = []
+        after = None
+        fetch_count = 0
+        max_fetches = 100  # 最多请求次数，防止无限循环
+        
+        while len(all_klines) < limit and fetch_count < max_fetches:
+            fetch_count += 1
+            klines = self._get_klines_impl(interval, 300, after)
+            
+            if not klines:
+                break
+            
+            all_klines.extend(klines)
+            print(f"第{fetch_count}次: 获取 {len(klines)} 条, 总计: {len(all_klines)}")
+            
+            # OKX返回倒序，最新在前，最后一条是最早的
+            # 用最后一条的时间戳作为after，获取更早的数据
+            if len(klines) >= 300:
+                after = klines[-1][0]
+            else:
+                break
+            
+            time.sleep(0.3)  # 避免请求过快
+        
+        return all_klines[:limit]
+    
+    def _get_klines_impl(self, interval: str, limit: int = 100, after: str = None) -> List[List]:
         inst_id = "BTC-USDT-SWAP"
         
         interval_map = {
@@ -154,6 +190,9 @@ class OKXClient:
             "bar": bar,
             "limit": limit
         }
+        
+        if after:
+            params["after"] = after
         
         proxies = {
             "http": "http://127.0.0.1:7897",
@@ -172,6 +211,57 @@ class OKXClient:
         except Exception as e:
             print(f"Exception getting klines: {e}")
             return []
+    
+    def get_klines_full(self, interval: str, limit: int = 2000) -> List[List]:
+        """使用ccxt循环获取完整历史K线数据"""
+        try:
+            import ccxt
+        except ImportError:
+            print("请安装ccxt: pip install ccxt")
+            return self.get_klines(interval, limit)
+        
+        exchange = ccxt.okx({
+            'enableRateLimit': True,
+        })
+        
+        exchange.session.proxies = {
+            'http': 'http://127.0.0.1:7897',
+            'https': 'http://127.0.0.1:7897'
+        }
+        
+        interval_map = {
+            "1h": "1h",
+            "4h": "4h", 
+            "1d": "1d"
+        }
+        timeframe = interval_map.get(interval, "1h")
+        
+        klines = []
+        fetch_since = None
+        request_count = 0
+        
+        while request_count < 10:  # 最多10次
+            request_count += 1
+            fetched = exchange.fetch_ohlcv(
+                symbol='BTC/USDT',
+                timeframe=timeframe,
+                since=fetch_since,
+                limit=300
+            )
+            
+            if not fetched:
+                break
+            
+            klines.extend(fetched)
+            print(f"第{request_count}次: 获取 {len(fetched)} 条, 总计: {len(klines)}")
+            
+            if len(klines) >= limit:
+                break
+            
+            fetch_since = fetched[-1][0] + 1
+            time.sleep(0.5)
+        
+        return klines[:limit]
 
     def get_current_price(self) -> Optional[float]:
         inst_id = "BTC-USDT-SWAP"

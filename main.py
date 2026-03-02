@@ -44,7 +44,7 @@ class BTCTader:
         print(f"[{datetime.now()}] 获取K线数据...")
         
         for interval in self.config.KLINE_INTERVALS:
-            klines = self.okx_client.get_klines(interval, self.config.KLINE_LIMIT)
+            klines = self.okx_client.get_klines(interval, 300)
             if klines:
                 self.data_manager.save_klines(interval, klines)
                 print(f"  {interval}: {len(klines)} 条")
@@ -227,9 +227,23 @@ class BTCTader:
         # 根据天数计算需要多少根K线（每天24根 + 预留指标计算需要20根）
         hours_needed = days * 24 + 20
         
-        self.fetch_and_store_data()
+        # 获取数据：直接调用支持分页的get_klines
+        klines_data = self.okx_client.get_klines("1h", hours_needed)
         
-        klines = self.data_manager.get_klines("1h", hours_needed)
+        # 转换为标准格式并保存到数据库
+        all_klines = []
+        if klines_data:
+            for k in klines_data:
+                all_klines.append([int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5])])
+            self.data_manager.save_klines("1h", all_klines)
+        
+        # 转为DataFrame
+        if all_klines:
+            import pandas as pd
+            klines = pd.DataFrame(all_klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        else:
+            klines = self.data_manager.get_klines("1h", hours_needed)
+        
         if klines.empty:
             print("没有K线数据")
             return None
