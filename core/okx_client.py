@@ -147,15 +147,20 @@ class OKXClient:
         
         bar = interval_map.get(interval, "1h")
         
-        url = f"{self.base_url}/market/history-candles"
+        url = f"{self.base_url}/api/v5/market/history-candles"
         params = {
             "instId": inst_id,
             "bar": bar,
             "limit": limit
         }
         
+        proxies = {
+            "http": "http://127.0.0.1:7897",
+            "https": "http://127.0.0.1:7897"
+        }
+        
         try:
-            response = requests.get(url, params=params, timeout=10)
+            response = requests.get(url, params=params, timeout=15, proxies=proxies)
             data = response.json()
             
             if data.get("code") == "0":
