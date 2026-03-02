@@ -2,7 +2,7 @@ import os
 
 class Config:
     # 交易设置
-    DRY_RUN = True  # 模拟交易模式
+    DRY_RUN = False  # 实盘模式
     TRADING_INSTRUMENT = "BTC-USDT-SWAP"
     LEVERAGE = 10
     POSITION_SIZE = 10.0
