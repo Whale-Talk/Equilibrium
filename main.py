@@ -745,6 +745,8 @@ class BTCTader:
         if initial_signal:
             self.execute_signal(initial_signal)
         
+        self.notification.start_command_handler(self)
+        
         scheduler = BlockingScheduler()
         
         # 每小时获取K线数据
