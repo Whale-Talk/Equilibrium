@@ -953,7 +953,7 @@ def main():
     parser = argparse.ArgumentParser(description="BTC TradingAgents Trader")
     parser.add_argument("--backtest", action="store_true", help="运行回测")
     parser.add_argument("--days", type=int, default=30, help="回测天数")
-    parser.add_argument("--version", type=str, default='original', choices=['original', 'improve1', 'improve2', 'improve_both', 'dynamic', 'moderate'], help="策略版本")
+    parser.add_argument("--version", type=str, default='original', choices=['original', 'moderate', 'dynamic'], help="策略版本: original(激进), moderate(温和), dynamic(智能)")
     parser.add_argument("--quarter", type=str, choices=['Q1','Q2','Q3','Q4'], help="按季度测试")
     parser.add_argument("--once", action="store_true", help="运行一次分析并执行")
     
