@@ -190,3 +190,67 @@ class DataManager:
         """, conn)
         conn.close()
         return df
+    
+    def get_trade_stats(self, days: int = 7) -> dict:
+        """获取交易统计"""
+        from datetime import datetime, timedelta
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # 总交易统计
+        cursor.execute("""
+            SELECT COUNT(*), SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END),
+                   SUM(pnl), MAX(pnl), MIN(pnl)
+            FROM trades WHERE status = 'closed'
+        """)
+        row = cursor.fetchone()
+        
+        total_trades = row[0] or 0
+        win_trades = row[1] or 0
+        total_pnl = row[2] or 0
+        max_win = row[3] or 0
+        max_loss = row[4] or 0
+        
+        win_rate = win_trades / total_trades * 100 if total_trades > 0 else 0
+        
+        # 今日交易
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_ts = int(today_start.timestamp() * 1000)
+        
+        cursor.execute("""
+            SELECT COUNT(*), COALESCE(SUM(pnl), 0)
+            FROM trades WHERE timestamp >= ?
+        """, (today_ts,))
+        today_row = cursor.fetchone()
+        today_trades = today_row[0] or 0
+        today_pnl = today_row[1] or 0
+        
+        # 本周交易
+        week_start = (datetime.now() - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+        week_ts = int(week_start.timestamp() * 1000)
+        
+        cursor.execute("""
+            SELECT COUNT(*), COALESCE(SUM(pnl), 0)
+            FROM trades WHERE timestamp >= ?
+        """, (week_ts,))
+        week_row = cursor.fetchone()
+        week_trades = week_row[0] or 0
+        week_pnl = week_row[1] or 0
+        
+        conn.close()
+        
+        return {
+            'total_trades': total_trades,
+            'win_trades': win_trades,
+            'loss_trades': total_trades - win_trades,
+            'win_rate': win_rate,
+            'total_pnl': total_pnl,
+            'best_trade': max_win,
+            'worst_trade': max_loss,
+            'today_trades': today_trades,
+            'today_pnl': today_pnl,
+            'week_trades': week_trades,
+            'week_pnl': week_pnl,
+            'total_withdrawn': 0  # 可后续添加
+        }

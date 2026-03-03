@@ -356,20 +356,58 @@ class NotificationManager:
 """
         return self.send_message(message)
     
-    def send_daily_report(self, balance: float, trades: int, pnl: float) -> bool:
+    def send_daily_report(self, balance: float, trades: int, pnl: float, trades_detail: list = None) -> bool:
+        from datetime import datetime
+        emoji = "📈" if pnl >= 0 else "📉"
+        
         message = f"""
-📊 *每日报告*
+📊 *每日报告* - {datetime.now().strftime('%Y-%m-%d')}
 
-余额: ${balance:,.2f}
-交易次数: {trades}
-总盈亏: ${pnl:,.2f}
+💰 余额: ${balance:,.2f}
+{emoji} 今日盈亏: ${pnl:,.2f}
+📊 交易次数: {trades}
+"""
+        if trades_detail:
+            wins = sum(1 for t in trades_detail if t.get('pnl', 0) > 0)
+            losses = len(trades_detail) - wins
+            win_rate = wins / len(trades_detail) * 100 if trades_detail else 0
+            message += f"\n胜率: {win_rate:.1f}% ({wins}胜/{losses}负)"
+        
+        return self.send_message(message)
+    
+    def send_weekly_report(self, stats: dict) -> bool:
+        from datetime import datetime
+        pnl = stats.get('total_pnl', 0)
+        emoji = "📈" if pnl >= 0 else "📉"
+        
+        message = f"""
+📅 *每周报告* - {datetime.now().strftime('%Y-%m-%d')}
+
+💰 总余额: ${stats.get('balance', 0):,.2f}
+{emoji} 本周盈亏: ${pnl:,.2f}
+📊 本周交易: {stats.get('trades', 0)}次
+🏆 胜率: {stats.get('win_rate', 0):.1f}%
+📈 最佳交易: ${stats.get('best_trade', 0):,.2f}
+📉 最差交易: ${stats.get('worst_trade', 0):,.2f}
+
+💎 累计提取: ${stats.get('total_withdrawn', 0):,.2f}
 """
         return self.send_message(message)
     
     def send_error(self, error: str) -> bool:
+        from datetime import datetime
         message = f"""
-⚠️ *系统错误*
+⚠️ *系统错误* - {datetime.now().strftime('%H:%M:%S')}
 
 {error}
+"""
+        return self.send_message(message)
+    
+    def send_alert(self, title: str, content: str) -> bool:
+        from datetime import datetime
+        message = f"""
+🚨 *{title}* - {datetime.now().strftime('%H:%M:%S')}
+
+{content}
 """
         return self.send_message(message)

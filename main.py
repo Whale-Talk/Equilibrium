@@ -758,6 +758,12 @@ class BTCTader:
         # 每5分钟检查持仓
         scheduler.add_job(self.check_positions, 'interval', minutes=5, id="check_positions")
         
+        # 每日报告（每天早上9点）
+        scheduler.add_job(self.send_daily_report_job, 'cron', hour=9, minute=0, id="daily_report")
+        
+        # 每周报告（每周一早上9点）
+        scheduler.add_job(self.send_weekly_report_job, 'cron', day_of_week='mon', hour=9, minute=0, id="weekly_report")
+        
         print("调度器已启动，按Ctrl+C退出")
         self.logger.info("调度器已启动")
         
@@ -766,6 +772,53 @@ class BTCTader:
         except (KeyboardInterrupt, SystemExit):
             print("\n系统退出")
             self.logger.info("系统退出")
+    
+    def send_daily_report_job(self):
+        """每日报告定时任务"""
+        try:
+            stats = self.data_manager.get_trade_stats()
+            position = self.trade_executor.get_position()
+            price = self.okx_client.get_current_price()
+            
+            message = f"""
+📊 *每日报告*
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+💰 当前价格: ${price:,.2f}
+💵 今日交易: {stats.get('today_trades', 0)}次
+📈 今日盈亏: ${stats.get('today_pnl', 0):,.2f}
+
+📊 总交易: {stats.get('total_trades', 0)}次
+🏆 胜率: {stats.get('win_rate', 0):.1f}%
+
+{'🟢 有持仓' if position else '🔴 无持仓'}
+"""
+            self.notification.send_message(message)
+        except Exception as e:
+            self.logger.error(f"每日报告发送失败: {e}")
+    
+    def send_weekly_report_job(self):
+        """每周报告定时任务"""
+        try:
+            stats = self.data_manager.get_trade_stats()
+            price = self.okx_client.get_current_price()
+            
+            message = f"""
+📅 *每周报告*
+
+⏰ {datetime.now().strftime('%Y-%m-%d')}
+
+💰 当前价格: ${price:,.2f}
+📊 本周交易: {stats.get('week_trades', 0)}次
+📈 本周盈亏: ${stats.get('week_pnl', 0):,.2f}
+
+💎 累计提取: ${stats.get('total_withdrawn', 0):,.2f}
+🏆 胜率: {stats.get('win_rate', 0):.1f}%
+"""
+            self.notification.send_message(message)
+        except Exception as e:
+            self.logger.error(f"每周报告发送失败: {e}")
 
     def run_backtest_v3(self, days: int = 30, strategy_version: str = 'moderate'):
         """V3架构回测 - 使用统一的Trader + BacktestExecutor"""
