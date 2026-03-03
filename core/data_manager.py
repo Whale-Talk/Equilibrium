@@ -6,8 +6,12 @@ from config import Config
 
 
 class DataManager:
-    def __init__(self, db_path: str = "data/btc_data.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: str = None):
+        # 默认使用K目录的数据库
+        if db_path is None:
+            self.db_path = "/home/mjy/AI量化/K/data/btc_klines.db"
+        else:
+            self.db_path = db_path
         self._init_db()
 
     def _init_db(self):
@@ -106,6 +110,13 @@ class DataManager:
     def get_klines(self, interval: str, limit: int = 100) -> pd.DataFrame:
         conn = sqlite3.connect(self.db_path)
         table_name = f"kline_{interval}"
+        
+        # 检查表是否存在
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'")
+        if not cursor.fetchone():
+            conn.close()
+            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
         df = pd.read_sql(f"""
             SELECT timestamp, open, high, low, close, volume
