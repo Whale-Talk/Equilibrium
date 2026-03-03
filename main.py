@@ -346,6 +346,11 @@ class BTCTader:
         trades = []
         position = None
         
+        # 手续费设置
+        TAKER_FEE = 0.0005  # 0.05%
+        total_fees = 0
+        fee_rate = TAKER_FEE
+        
         win_count = 0
         loss_count = 0
         daily_returns = []
@@ -470,6 +475,11 @@ class BTCTader:
                         add_size = balance * RISK_PERCENT / (atr * ATR_SL / price)
                         add_size = max(5, min(add_size, balance * 0.3))
                         
+                        # 加仓扣手续费
+                        add_fee = add_size * fee_rate
+                        balance -= add_fee
+                        total_fees += add_fee
+                        
                         # 更新平均成本价（仅用于爆仓计算）
                         old_size = position["position_size"]
                         avg_price = position.get("avg_price", position["price"])
@@ -486,7 +496,7 @@ class BTCTader:
                         else:
                             position["liq_price"] = new_avg_price * (1 + 1/leverage - MM_RATE)
                         
-                        print(f"[回测] ➕ 加仓 @ ${price:.2f} | 仓位: ${new_size:.2f} | 爆仓: ${position['liq_price']:.2f}", flush=True)
+                        print(f"[回测] ➕ 加仓 @ ${price:.2f} | 仓位: ${new_size:.2f} | 爆仓: ${position['liq_price']:.2f} | 手续费: ${add_fee:.2f}", flush=True)
                 
                 # 反向信号 → 平仓
                 elif signal != "hold" and signal != position["action"]:
@@ -497,15 +507,19 @@ class BTCTader:
                         pnl_pct = (position["price"] - price) / position["price"] * position["leverage"]
                     
                     pnl = position["position_size"] * pnl_pct
-                    balance += pnl
+                    
+                    # 平仓扣手续费
+                    close_fee = position["position_size"] * fee_rate
+                    balance += pnl - close_fee
+                    total_fees += close_fee
                     
                     if pnl > 0:
                         win_count += 1
                     else:
                         loss_count += 1
                     
-                    trades.append({"action": position["action"], "price": price, "pnl": pnl, "type": "close", "reason": "反向信号"})
-                    print(f"[回测] ⚠️ 反向信号平仓 @ ${price:.2f} | 盈亏: ${pnl:.2f} | 余额: ${balance:.2f}", flush=True)
+                    trades.append({"action": position["action"], "price": price, "pnl": pnl, "fee": close_fee, "type": "close", "reason": "反向信号"})
+                    print(f"[回测] ⚠️ 反向信号平仓 @ ${price:.2f} | 盈亏: ${pnl:.2f} | 手续费: ${close_fee:.2f} | 余额: ${balance:.2f}", flush=True)
                     
                     position = None
             
@@ -516,6 +530,11 @@ class BTCTader:
                 
                 # 计算爆仓价格 (多头)
                 liq_price = price * (1 - 1/leverage + MM_RATE)
+                
+                # 开仓扣手续费
+                open_fee = position_size * fee_rate
+                balance -= open_fee
+                total_fees += open_fee
                 
                 position = {
                     "action": "buy", 
@@ -532,8 +551,8 @@ class BTCTader:
                     "liq_price": liq_price,  # 爆仓价格
                     "avg_price": price  # 平均成本价（仅用于爆仓计算）
                 }
-                trades.append({"action": "buy", "price": price, "type": "open", "rsi": rsi, "sl": stop_loss, "tp1": take_profit_tp1, "tp2": take_profit_tp2, "size": position_size, "liq": liq_price})
-                print(f"[回测] 开多 @ ${price:.2f} | RSI: {rsi:.2f} | 仓位: ${position_size:.2f} | 止损: ${stop_loss:.2f} | 止盈1: ${take_profit_tp1:.2f} | 止盈2: ${take_profit_tp2:.2f} | 爆仓: ${liq_price:.2f}", flush=True)
+                trades.append({"action": "buy", "price": price, "type": "open", "rsi": rsi, "sl": stop_loss, "tp1": take_profit_tp1, "tp2": take_profit_tp2, "size": position_size, "liq": liq_price, "fee": open_fee})
+                print(f"[回测] 开多 @ ${price:.2f} | RSI: {rsi:.2f} | 仓位: ${position_size:.2f} | 止损: ${stop_loss:.2f} | 止盈1: ${take_profit_tp1:.2f} | 止盈2: ${take_profit_tp2:.2f} | 爆仓: ${liq_price:.2f} | 手续费: ${open_fee:.2f}", flush=True)
             
             elif signal == "sell" and position is None:
                 stop_loss = bb_upper + atr * ATR_SL
@@ -542,6 +561,11 @@ class BTCTader:
                 
                 # 计算爆仓价格 (空头)
                 liq_price = price * (1 + 1/leverage - MM_RATE)
+                
+                # 开仓扣手续费
+                open_fee = position_size * fee_rate
+                balance -= open_fee
+                total_fees += open_fee
                 
                 position = {
                     "action": "sell", 
@@ -558,8 +582,8 @@ class BTCTader:
                     "liq_price": liq_price,  # 爆仓价格
                     "avg_price": price  # 平均成本价（仅用于爆仓计算）
                 }
-                trades.append({"action": "sell", "price": price, "type": "open", "rsi": rsi, "sl": stop_loss, "tp1": take_profit_tp1, "tp2": take_profit_tp2, "size": position_size, "liq": liq_price})
-                print(f"[回测] 开空 @ ${price:.2f} | RSI: {rsi:.2f} | 仓位: ${position_size:.2f} | 止损: ${stop_loss:.2f} | 止盈1: ${take_profit_tp1:.2f} | 止盈2: ${take_profit_tp2:.2f} | 爆仓: ${liq_price:.2f}", flush=True)
+                trades.append({"action": "sell", "price": price, "type": "open", "rsi": rsi, "sl": stop_loss, "tp1": take_profit_tp1, "tp2": take_profit_tp2, "size": position_size, "liq": liq_price, "fee": open_fee})
+                print(f"[回测] 开空 @ ${price:.2f} | RSI: {rsi:.2f} | 仓位: ${position_size:.2f} | 止损: ${stop_loss:.2f} | 止盈1: ${take_profit_tp1:.2f} | 止盈2: ${take_profit_tp2:.2f} | 爆仓: ${liq_price:.2f} | 手续费: ${open_fee:.2f}", flush=True)
             
             elif position is not None:
                 if position["action"] == "buy":
@@ -596,14 +620,18 @@ class BTCTader:
                     continue
                 
                 if should_close:
+                    # 平仓扣手续费
+                    close_fee = position["position_size"] * fee_rate
+                    total_fees += close_fee
+                    
                     # 爆仓处理
                     if hit_liq:
                         pnl = -position["position_size"] * LIQ_PENALTY  # 爆仓损失90%仓位
-                        balance += pnl
-                        print(f"[回测] 💥 爆仓 @ ${price:.2f} | 盈亏: ${pnl:.2f} | 余额: ${balance:.2f}", flush=True)
+                        balance += pnl - close_fee
+                        print(f"[回测] 💥 爆仓 @ ${price:.2f} | 盈亏: ${pnl:.2f} | 手续费: ${close_fee:.2f} | 余额: ${balance:.2f}", flush=True)
                     else:
                         pnl = position["position_size"] * pnl_pct
-                        balance += pnl
+                        balance += pnl - close_fee
                     daily_returns.append(pnl / balance if balance > 0 else 0)
                     
                     if balance > max_balance:
@@ -614,7 +642,7 @@ class BTCTader:
                     else:
                         loss_count += 1
                     
-                    trades.append({"action": position["action"], "price": price, "pnl": pnl, "type": "close"})
+                    trades.append({"action": position["action"], "price": price, "pnl": pnl, "fee": close_fee, "type": "close"})
                     
                     emoji = "✅" if pnl >= 0 else "💥" if hit_liq else "❌"
                     if hit_liq:
@@ -627,7 +655,7 @@ class BTCTader:
                         reason = "止损"
                     else:
                         reason = "超时"
-                    print(f"[回测] {emoji} 平仓 @ ${price:.2f} | 盈亏: ${pnl:.2f} | 原因: {reason} | 余额: ${balance:.2f}", flush=True)
+                    print(f"[回测] {emoji} 平仓 @ ${price:.2f} | 盈亏: ${pnl:.2f} | 手续费: ${close_fee:.2f} | 原因: {reason} | 余额: ${balance:.2f}", flush=True)
                     
                     position = None
                     
@@ -698,7 +726,10 @@ class BTCTader:
             print(f"累计提取收益(扣除补充后): ${total_withdrawn:.2f}", flush=True)
         print(f"最终余额: ${balance:.2f}", flush=True)
         total_return = balance + total_withdrawn - self.config.INITIAL_BALANCE
+        net_return = total_return - total_fees
         print(f"总收益: ${total_return:.2f} ({total_return/self.config.INITIAL_BALANCE*100:.2f}%)", flush=True)
+        print(f"手续费: ${total_fees:.2f} (费率: {fee_rate*100}%)", flush=True)
+        print(f"净收益: ${net_return:.2f} ({net_return/self.config.INITIAL_BALANCE*100:.2f}%)", flush=True)
         print(f"最大回撤: {max_drawdown * 100:.2f}%", flush=True)
         print(f"夏普比率: {sharpe:.2f}", flush=True)
         print(f"交易次数: {len([t for t in trades if t.get('type') == 'open'])}", flush=True)
@@ -711,6 +742,10 @@ class BTCTader:
             "initial_balance": self.config.INITIAL_BALANCE,
             "final_balance": balance,
             "return_pct": (balance - self.config.INITIAL_BALANCE) / self.config.INITIAL_BALANCE * 100,
+            "total_return": total_return,
+            "total_fees": total_fees,
+            "net_return": net_return,
+            "net_return_pct": net_return / self.config.INITIAL_BALANCE * 100,
             "max_drawdown": max_drawdown * 100,
             "sharpe_ratio": sharpe,
             "trades": len([t for t in trades if t.get('type') == 'open']),
@@ -990,6 +1025,8 @@ class BTCTader:
         print(f"最终余额: ${result['final_balance']:.2f}")
         print(f"累计提取: ${result['total_withdrawn']:.2f}")
         print(f"总收益: ${result['total_return']:.2f} ({result['return_pct']:.2f}%)")
+        print(f"手续费: ${result.get('total_fees', 0):.2f}")
+        print(f"净收益: ${result.get('net_return', result['total_return']):.2f} ({result.get('net_return_pct', result['return_pct']):.2f}%)")
         print(f"交易次数: {result['trades']}")
         print(f"胜率: {result['win_rate']:.2f}%")
         
@@ -1013,12 +1050,17 @@ def main():
         result = trader.run_backtest(args.days, strategy_version=args.version, quarter=args.quarter)
         
         if result:
+            total_fees = result.get('total_fees', 0)
+            net_return = result.get('net_return', result.get('total_return', 0))
+            net_return_pct = result.get('net_return_pct', result.get('return_pct', 0))
             message = f"""
 📊 *回测结果*
 
 初始资金: ${result['initial_balance']:.2f}
 最终余额: ${result['final_balance']:.2f}
-收益率: {result['return_pct']:.2f}%
+收益率: {result.get('return_pct', result.get('total_return', 0)/result['initial_balance']*100):.2f}%
+手续费: ${total_fees:.2f}
+净收益: ${net_return:.2f} ({net_return_pct:.2f}%)
 交易次数: {result['trades']}
 胜率: {result['win_rate']:.2f}%
 """

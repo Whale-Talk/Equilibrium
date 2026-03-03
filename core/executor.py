@@ -48,7 +48,11 @@ class Executor(ABC):
 class BacktestExecutor(Executor):
     """回测执行器"""
     
-    def __init__(self, initial_balance: float = 100.0):
+    # OKX U本位合约手续费率
+    MAKER_FEE = 0.0002  # 0.02%
+    TAKER_FEE = 0.0005  # 0.05%
+    
+    def __init__(self, initial_balance: float = 100.0, use_maker_fee: bool = False):
         self.balance = initial_balance
         self.initial_balance = initial_balance
         self.position = None
@@ -57,6 +61,9 @@ class BacktestExecutor(Executor):
         self.trades = []
         self.daily_returns = []
         self.max_balance = initial_balance
+        self.total_fees = 0
+        self.use_maker_fee = use_maker_fee
+        self.fee_rate = self.MAKER_FEE if use_maker_fee else self.TAKER_FEE
     
     def get_position(self) -> Optional[Dict]:
         return self.position
@@ -64,6 +71,11 @@ class BacktestExecutor(Executor):
     def open_position(self, action: str, price: float, amount: float,
                     leverage: int, stop_loss: float, tp1: float, tp2: float,
                     atr: float, reason: str) -> bool:
+        # 开仓扣手续费
+        open_fee = amount * self.fee_rate
+        self.balance -= open_fee
+        self.total_fees += open_fee
+        
         self.position = {
             "action": action,
             "entry_price": price,
@@ -94,6 +106,11 @@ class BacktestExecutor(Executor):
         if not self.position:
             return False
         
+        # 加仓扣手续费
+        add_fee = amount * self.fee_rate
+        self.balance -= add_fee
+        self.total_fees += add_fee
+        
         old_amount = self.position["amount"]
         old_price = self.position["entry_price"]
         new_amount = old_amount + amount
@@ -121,7 +138,11 @@ class BacktestExecutor(Executor):
             pnl_pct = (entry_price - price) / entry_price * leverage
         
         pnl = amount * pnl_pct
-        self.balance += pnl
+        
+        # 平仓扣手续费
+        close_fee = amount * self.fee_rate
+        self.balance += pnl - close_fee
+        self.total_fees += close_fee
         
         # 补充本金：如果余额<100，从已提取中补充
         if self.balance < self.base_balance and self.total_withdrawn > 0:
@@ -171,16 +192,22 @@ class BacktestExecutor(Executor):
         total_trades = len(wins) + len(losses)
         win_rate = len(wins) / total_trades * 100 if total_trades > 0 else 0
         
+        total_return = self.balance + self.total_withdrawn - self.initial_balance
+        
         return {
             "initial_balance": self.initial_balance,
             "final_balance": self.balance,
             "total_withdrawn": self.total_withdrawn,
-            "total_return": self.balance + self.total_withdrawn - self.initial_balance,
-            "return_pct": (self.balance + self.total_withdrawn - self.initial_balance) / self.initial_balance * 100,
+            "total_return": total_return,
+            "return_pct": total_return / self.initial_balance * 100,
             "trades": total_trades,
             "wins": len(wins),
             "losses": len(losses),
             "win_rate": win_rate,
+            "total_fees": self.total_fees,
+            "fee_rate": self.fee_rate,
+            "net_return": total_return - self.total_fees,
+            "net_return_pct": (total_return - self.total_fees) / self.initial_balance * 100,
             "trades_detail": self.trades
         }
 
