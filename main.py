@@ -26,8 +26,9 @@ from utils.indicators import calculate_all_indicators, get_indicator_summary
 
 
 class BTCTader:
-    def __init__(self, config: type = Config):
+    def __init__(self, config: type = Config, strategy_version: str = 'original'):
         self.config = config
+        self.strategy_version = strategy_version  # 当前使用的策略
         self.okx_client = OKXClient(config)
         self.data_manager = DataManager()
         self.notification = NotificationManager(config)
@@ -61,7 +62,7 @@ class BTCTader:
         self.last_analysis_time["periodic"] = now
         
         print(f"\n[{now}] 开始指标信号分析...")
-        self.logger.info(f"开始指标信号分析")
+        self.logger.info(f"开始指标信号分析 (策略: {self.strategy_version})")
         
         klines_1h = self.data_manager.get_klines("1h", 100)
         if klines_1h.empty:
@@ -98,12 +99,20 @@ class BTCTader:
         macd_signal = latest.get('macd_signal', 0)
         adx = latest.get('adx', 0)
         
-        # 
+        # 根据策略调整参数
+        enable_add = True
+        if self.strategy_version == 'moderate':
+            enable_add = False  # moderate禁止加仓
+        elif self.strategy_version == 'dynamic':
+            enable_add = False  # dynamic根据趋势决定
+        
+        # 报告消息添加策略信息
         report_msg = f"""
 📊 *每小时分析报告*
 
 ⏰ {now.strftime('%Y-%m-%d %H:%M')}
 💰 当前价格: ${current_price:,.2f}
+🎯 策略: {self.strategy_version}
 
 📈 指标:
 - RSI: {rsi:.2f}
@@ -959,7 +968,7 @@ def main():
     
     args = parser.parse_args()
     
-    trader = BTCTader()
+    trader = BTCTader(strategy_version=args.version)
     
     if args.backtest:
         # 使用原有回测逻辑（与V2.3一致）
