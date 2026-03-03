@@ -173,6 +173,40 @@ class OKXClient:
         
         return all_klines[:limit]
     
+    def get_klines_since(self, interval: str, since_timestamp: int) -> List[List]:
+        """获取指定时间戳之后的K线数据（增量获取）"""
+        all_klines = []
+        after = None
+        fetch_count = 0
+        max_fetches = 10
+        
+        while fetch_count < max_fetches:
+            fetch_count += 1
+            klines = self._get_klines_impl(interval, 300, after)
+            
+            if not klines:
+                break
+            
+            # 过滤掉比本地更早的数据
+            new_klines = [k for k in klines if int(k[0]) > since_timestamp]
+            
+            if new_klines:
+                all_klines.extend(new_klines)
+            
+            # OKX返回倒序，最新在前，最后一条是最早的
+            if len(klines) >= 300:
+                after = klines[-1][0]
+            else:
+                break
+            
+            # 如果没有新数据了，就停止
+            if not new_klines or int(klines[-1][0]) <= since_timestamp:
+                break
+            
+            time.sleep(0.3)
+        
+        return all_klines
+    
     def _get_klines_impl(self, interval: str, limit: int = 100, after: str = None) -> List[List]:
         inst_id = "BTC-USDT-SWAP"
         

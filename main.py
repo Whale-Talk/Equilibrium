@@ -44,14 +44,28 @@ class BTCTader:
         self.analysis_interval_hours = 4
     
     def fetch_and_store_data(self):
-        print(f"[{datetime.now()}] 获取K线数据...")
+        """增量获取K线数据（只获取本地没有的最新数据）"""
+        print(f"[{datetime.now()}] 获取K线数据（增量更新）...")
         
         for interval in self.config.KLINE_INTERVALS:
-            klines = self.okx_client.get_klines(interval, 300)
-            if klines:
-                self.data_manager.save_klines(interval, klines)
-                print(f"  {interval}: {len(klines)} 条")
-    
+            # 获取本地最新数据的时间戳
+            local_data = self.data_manager.get_klines(interval, 1)
+            if not local_data.empty:
+                # 只获取比本地更新的数据
+                latest_ts = local_data['timestamp'].max()
+                klines = self.okx_client.get_klines_since(interval, latest_ts)
+                if klines:
+                    self.data_manager.save_klines(interval, klines)
+                    print(f"  {interval}: +{len(klines)} 条")
+                else:
+                    print(f"  {interval}: 已是最新")
+            else:
+                # 本地没有数据，获取初始数据
+                klines = self.okx_client.get_klines(interval, 300)
+                if klines:
+                    self.data_manager.save_klines(interval, klines)
+                    print(f"  {interval}: {len(klines)} 条")
+
     def run_analysis(self, force: bool = False):
         now = datetime.now()
         
@@ -234,10 +248,12 @@ class BTCTader:
     
     def run_backtest(self, days: int = 30, max_hours: int = 12, leverage: int = 10, 
                    enable_add_position: bool = True, withdraw_profit: bool = True,
-                   strategy_version: str = 'original', quarter: str = None):
+                   strategy_version: str = 'original', quarter: str = None, interval: str = '1h'):
         """回测：优化版指标信号 + 移动止损 + 分批止盈 + 动态仓位 + 加仓 + 每月提取收益
-        strategy_version: 'original', 'improve1', 'improve2', 'improve_both'
-        quarter: 'Q1','Q2','Q3','Q4' """
+        strategy_version: 'original', 'moderate', 'dynamic'
+        quarter: 'Q1','Q2','Q3','Q4'
+        interval: '1h', '5m', '15m', '30m'
+        """
         import sys
         import numpy as np
         from datetime import datetime
@@ -250,30 +266,52 @@ class BTCTader:
         MM_RATE = 0.005  # 维持保证金率 (0.5%)
         LIQ_PENALTY = 0.9  # 爆仓后剩余比例
         
-        print(f"开始回测 (最近 {days} 天)")
+        print(f"开始回测 (最近 {days} 天, K线周期: {interval})")
         print(f"参数: 持仓{max_hours}h 杠杆{leverage}x | ATR_SL={ATR_SL}")
         print(f"加仓: {'启用' if enable_add_position else '禁用'} | 每月提取: {'启用' if withdraw_profit else '禁用'}")
         sys.stdout.flush()
         
-        # 根据天数计算需要多少根K线（每天24根 + 预留指标计算需要20根）
-        hours_needed = days * 24 + 20
+        # 根据天数和K线周期计算需要多少根K线
+        bars_per_day = {'1h': 24, '5m': 288, '15m': 96, '30m': 48}.get(interval, 24)
+        bars_needed = days * bars_per_day + 20
         
-        # 获取数据：直接调用支持分页的get_klines
-        klines_data = self.okx_client.get_klines("1h", hours_needed)
+        # 先检查本地数据库是否有足够数据
+        local_klines = self.data_manager.get_klines(interval, bars_needed)
         
-        # 转换为标准格式并保存到数据库
-        all_klines = []
-        if klines_data:
-            for k in klines_data:
-                all_klines.append([int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5])])
-            self.data_manager.save_klines("1h", all_klines)
-        
-        # 转为DataFrame
-        if all_klines:
-            import pandas as pd
-            klines = pd.DataFrame(all_klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        if not local_klines.empty and len(local_klines) >= bars_needed:
+            # 本地数据足够
+            print(f"使用本地数据: {len(local_klines)} 条")
+            klines = local_klines
+            all_klines = None
+        elif not local_klines.empty:
+            # 本地数据不够，请求补充
+            print(f"本地数据不足: {len(local_klines)} 条，需要 {bars_needed} 条")
+            # 从API获取完整数据（会包含本地没有的更早数据）
+            klines_data = self.okx_client.get_klines(interval, bars_needed)
+            all_klines = []
+            if klines_data:
+                for k in klines_data:
+                    all_klines.append([int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5])])
+                self.data_manager.save_klines(interval, all_klines)
+                import pandas as pd
+                klines = pd.DataFrame(all_klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            else:
+                klines = local_klines
         else:
-            klines = self.data_manager.get_klines("1h", hours_needed)
+            # 本地没有数据，从API获取
+            print(f"本地无数据，从API获取...")
+            klines_data = self.okx_client.get_klines(interval, bars_needed)
+            all_klines = []
+            if klines_data:
+                for k in klines_data:
+                    all_klines.append([int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5])])
+                self.data_manager.save_klines(interval, all_klines)
+            
+            if all_klines:
+                import pandas as pd
+                klines = pd.DataFrame(all_klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            else:
+                klines = self.data_manager.get_klines(interval, bars_needed)
         
         if klines.empty:
             print("没有K线数据")
@@ -283,10 +321,10 @@ class BTCTader:
         klines = klines.sort_values('timestamp').reset_index(drop=True)
         
         # 如果数据超过需要的天数，从最早开始截取
-        if len(klines) > hours_needed:
-            klines = klines.iloc[-hours_needed:].reset_index(drop=True)
+        if len(klines) > bars_needed:
+            klines = klines.iloc[-bars_needed:].reset_index(drop=True)
         
-        print(f"[回测] K线数据: {len(klines)} 条 ({days} 天)", flush=True)
+        print(f"[回测] K线数据: {len(klines)} 条 ({days} 天, {interval})", flush=True)
         
         df = calculate_all_indicators(klines)
         
