@@ -1,6 +1,6 @@
 # Equilibrium - BTC 量化交易系统
 
-## v3.0 新架构
+## v4.0 最新稳定版
 
  Equilibrium 是基于技术指标的量化交易系统，采用新架构：
 - **核心逻辑**（trader.py）- 信号分析、持仓管理
@@ -14,12 +14,13 @@ Equilibrium/
 ├── config/
 │   └── config.py              # 配置
 ├── core/                      # 核心模块
-│   ├── trader.py              # 核心交易逻辑 (V3)
-│   ├── executor.py            # 执行器接口 (V3)
+│   ├── trader.py              # 核心交易逻辑
+│   ├── executor.py            # 执行器接口
 │   ├── okx_client.py          # OKX API客户端
 │   ├── trade_executor.py      # 交易执行器
 │   ├── data_manager.py        # 数据管理
-│   └── notification.py         # 通知
+│   ├── notification.py        # Telegram通知
+│   └── logger.py              # 日志功能
 ├── utils/
 │   └── indicators.py          # 技术指标
 └── tests/                     # 测试
@@ -36,14 +37,47 @@ Equilibrium/
 - **每月提取收益**: 余额超过100U时提取
 - **爆仓保护**: 止损始终先于爆仓触发
 
+## Telegram通知
+
+支持交互式命令查询系统状态：
+
+| 命令 | 功能 |
+|------|------|
+| 帮助 | 显示所有命令 |
+| 状态 | 系统状态、价格、持仓 |
+| 价格 | 当前BTC价格 |
+| 余额 | 账户余额 |
+| 仓位 | 当前持仓详情 |
+| 信号 | 手动分析信号 |
+| 交易 | 最近交易记录 |
+| 统计 | 交易统计数据 |
+
+### 通知时机
+
+| 时机 | 说明 |
+|------|------|
+| 启动时 | 程序启动 + 存活确认(10s/1min/5min) |
+| 每小时 | 分析报告（价格、指标） |
+| 每日9点 | 每日报告 |
+| 每周一9点 | 每周报告 |
+| 开仓时 | 交易信号 |
+| 平仓时 | 交易结果 |
+| 异常时 | 系统错误/报警 |
+
 ## 运行命令
 
 ```bash
-# 回测
+# 回测（默认original策略）
 python main.py --backtest --days 365
 
-# 实盘
+# 回测（指定策略）
+python main.py --backtest --days 365 --version moderate
+
+# 实盘（默认original策略）
 python main.py --live
+
+# 实盘（指定策略）
+python main.py --live --version moderate
 
 # 单次分析
 python main.py --once
@@ -51,13 +85,13 @@ python main.py --once
 
 ## 回测结果
 
-### 7年回测 (2019-2025)
+### 7年回测 (2019-2026)
 
-| 版本 | 总收益 | 交易次数 |
-|------|--------|----------|
-| **v3.0** ⭐ | **+9160%** | 1440 |
-| moderate | +9160% | 1440 |
-| original | +8405% | 1440 |
+| 版本 | 总收益 | 交易次数 | 胜率 |
+|------|--------|----------|------|
+| **v4.0 / moderate** ⭐ | **+10346%** | 1468 | 41.5% |
+| original | +10238% | 1468 | 41.5% |
+| dynamic | +9491% | 1585 | 44.2% |
 
 ### 1年回测 (2025)
 
@@ -82,9 +116,10 @@ core/executor.py (执行层)
 
 ## 数据说明
 
-- 数据来源: OKX API + 本地SQLite
-- 时间范围: 2019-01-01 ~ 2026-02-26
+- 数据来源: K目录数据库（/home/mjy/AI量化/K/data/btc_klines.db）
+- 时间范围: 2019-01-01 ~ 2026-03
 - 数据量: 62000+根1小时K线
+- 架构：K文件负责数据收集，Equilibrium只负责交易
 
 ---
 
@@ -167,13 +202,15 @@ python main.py --live
 ### 4. 运行模式
 
 ```bash
-# 回测（指定天数）
+# 回测（指定天数，默认original策略）
 python main.py --backtest --days 365          # 最近1年
 python main.py --backtest --days 2555           # 7年完整回测
 python main.py --backtest --days 60 --version moderate  # 特定策略
 
 # 实盘交易
 python main.py --live
+python main.py --live --version moderate       # 指定温和策略
+python main.py --live --version dynamic         # 指定动态策略
 
 # 单次分析（不执行交易）
 python main.py --once
@@ -188,11 +225,11 @@ DRY_RUN = False  # 改为False启用实盘
 
 ### 6. 策略版本
 
-| 版本 | 说明 |
-|------|------|
-| `original` | 原始策略 |
-| `moderate` | 温和风控（推荐） |
-| `dynamic` | 动态切换 |
+| 版本 | 说明 | 适合人群 |
+|------|------|----------|
+| `original` (默认) | 激进型，不限制加仓和持仓时间 | 追求高收益 |
+| `moderate` | 温和型，震荡市场仓位减半，禁止加仓 | 稳健型投资者（推荐） |
+| `dynamic` | 智能型，根据趋势强度动态调整 | 自动化交易 |
 
 ### 6. 环境变量 (.env)
 
@@ -247,12 +284,20 @@ Equilibrium/
 │   ├── executor.py            # 执行层（回测/实盘）
 │   ├── okx_client.py          # OKX API
 │   ├── data_manager.py        # 数据管理
-│   └── trade_executor.py      # 交易执行
+│   ├── notification.py        # Telegram通知
+│   └── logger.py              # 日志功能
 ├── utils/
 │   └── indicators.py         # 技术指标
-└── data/
-    └── btc_data.db            # K线数据
+├── logs/                      # 日志目录
+└── data/                      # 本地数据（备用）
 ```
+
+### 10. 数据架构
+
+**重要**：系统使用K目录的数据库作为数据源：
+- 路径：`/home/mjy/AI量化/K/data/btc_klines.db`
+- K文件负责数据收集更新
+- Equilibrium只负责交易逻辑
 
 ---
 
@@ -277,4 +322,4 @@ API权限要求：`trade`（交易权限即可）
 
 ---
 
-*更新日期: 2026-02-27*
+*更新日期: 2026-03-04*
