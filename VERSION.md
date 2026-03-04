@@ -4,7 +4,7 @@
 
 | 分支 | 说明 |
 |------|------|
-| `master` | 稳定版 v4.1 |
+| `master` | 稳定版 v4.2 |
 | `v2.1-improve` | 改进版v2 |
 | `v3.0` | v3.0架构 |
 | `feature/multi-interval` | 多周期K线回测 |
@@ -28,6 +28,7 @@
 | `v3.9` | v3.9 | +10243% | 数据优化：增量更新+本地优先 |
 | `v4.0` | v4.0 | +10243% | 数据架构调整：使用K目录数据库 |
 | `v4.1` | v4.1 | +869% | 添加手续费计算（0.05% Taker） |
+| `v4.2` | v4.2 | - | 日志规范化 + 断线重连 + 健康检查 |
 
 ## v4.1 (2026-03-04) - 当前稳定版
 
@@ -296,4 +297,67 @@ python main.py --once
 
 ---
 
-*最后更新: 2026-03-02*
+## v4.2 (2026-03-04) - 当前稳定版
+
+### 日志规范化
+- **增强Logger类**：
+  - 支持结构化日志（JSON格式）
+  - 添加`log_trade()`方法记录交易操作
+  - 添加`log_api_call()`方法记录API调用
+  - 添加`log_error_with_context()`方法记录异常上下文
+- **日志装饰器**：`@log_execution`自动记录函数执行时间、参数和返回值
+- **统一日志记录**：所有print替换为logger调用
+
+### 断线重连机制
+- **重试装饰器**（`core/retry.py`）：
+  - `@retry_on_exception`: 通用重试装饰器，支持指数退避
+  - `@retry_on_network_error`: 专门针对网络错误的重试
+  - 可配置最大重试次数、退避因子、最大退避时间
+- **OKXClient重试**：所有API调用添加重试装饰器
+- **TelegramBot重试**：消息发送和轮询添加重试装饰器
+
+### 健康检查
+- **HealthChecker类**（`core/health_check.py`）：
+  - 定期检查OKX API连通性
+  - 定期检查Telegram Bot连通性
+  - 定期检查数据库连接状态
+  - 连续失败达到阈值时触发告警
+  - 告警冷却机制，避免频繁通知
+- **集成到main.py**：系统启动时自动启动健康检查
+
+### 系统健壮性
+- **DataManager连接池**：
+  - 每个线程维护独立连接
+  - 自动重连失效连接
+  - 避免频繁创建/关闭连接
+- **完善异常处理**：记录完整堆栈信息和上下文
+
+### 配置项
+```python
+# 日志配置
+LOG_LEVEL = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+LOG_FORMAT = "text"  # text, json
+LOG_FILE_MAX_SIZE = 10 * 1024 * 1024  # 10MB
+LOG_FILE_BACKUP_COUNT = 30
+
+# 重试配置
+API_MAX_RETRIES = 3
+API_BACKOFF_FACTOR = 2.0
+API_TIMEOUT = 15
+API_MAX_TIMEOUT = 30
+
+# 健康检查配置
+HEALTH_CHECK_ENABLED = True
+HEALTH_CHECK_INTERVAL = 60  # 秒
+HEALTH_CHECK_TIMEOUT = 10
+HEALTH_CHECK_ALERT = True
+
+# 熔断器配置
+CIRCUIT_BREAKER_ENABLED = True
+CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5
+CIRCUIT_BREAKER_TIMEOUT = 60
+```
+
+---
+
+*最后更新: 2026-03-04*

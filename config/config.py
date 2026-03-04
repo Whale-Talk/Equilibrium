@@ -42,3 +42,27 @@ class Config:
     # K线数据
     KLINE_INTERVALS = ["1h", "4h", "1d"]
     KLINE_LIMIT = 2000
+
+    # ===== 日志配置 =====
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+    LOG_FORMAT = os.getenv("LOG_FORMAT", "text")  # text, json
+    LOG_DIR = os.getenv("LOG_DIR", "logs")
+    LOG_FILE_MAX_SIZE = 10 * 1024 * 1024  # 10MB
+    LOG_FILE_BACKUP_COUNT = 30
+
+    # ===== API重试配置 =====
+    API_MAX_RETRIES = int(os.getenv("API_MAX_RETRIES", "3"))
+    API_BACKOFF_FACTOR = float(os.getenv("API_BACKOFF_FACTOR", "2.0"))
+    API_TIMEOUT = int(os.getenv("API_TIMEOUT", "15"))
+    API_MAX_TIMEOUT = int(os.getenv("API_MAX_TIMEOUT", "30"))
+
+    # ===== 健康检查配置 =====
+    HEALTH_CHECK_ENABLED = os.getenv("HEALTH_CHECK_ENABLED", "true").lower() == "true"
+    HEALTH_CHECK_INTERVAL = int(os.getenv("HEALTH_CHECK_INTERVAL", "60"))  # 秒
+    HEALTH_CHECK_TIMEOUT = int(os.getenv("HEALTH_CHECK_TIMEOUT", "10"))
+    HEALTH_CHECK_ALERT = os.getenv("HEALTH_CHECK_ALERT", "true").lower() == "true"
+
+    # ===== 熔断器配置 =====
+    CIRCUIT_BREAKER_ENABLED = os.getenv("CIRCUIT_BREAKER_ENABLED", "true").lower() == "true"
+    CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(os.getenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD", "5"))
+    CIRCUIT_BREAKER_TIMEOUT = int(os.getenv("CIRCUIT_BREAKER_TIMEOUT", "60"))  # 秒

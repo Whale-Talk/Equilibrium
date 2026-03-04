@@ -22,6 +22,7 @@ from core.btc_trading_agents import TradingAgent
 from core.trader import Trader
 from core.executor import BacktestExecutor, LiveExecutor
 from core.logger import get_logger
+from core.health_check import HealthChecker
 from utils.indicators import calculate_all_indicators, get_indicator_summary
 
 
@@ -30,23 +31,45 @@ class BTCTader:
         self.config = config
         self.strategy_version = strategy_version  # 当前使用的策略
         self.okx_client = OKXClient(config)
-        self.data_manager = DataManager()
+        self.data_manager = DataManager(config=config)
         self.notification = NotificationManager(config)
         self.trade_executor = TradeExecutor(config, self.data_manager, self.notification)
-        self.logger = get_logger()
-        
+        self.logger = get_logger(config=config)
+
         # V3 架构
         self.backtest_executor = None
         self.trader = None
         self.live_executor = None
-        
+
         self.last_analysis_time = {}
         self.analysis_interval_hours = 4
+
+        # 健康检查器
+        self.health_checker = None
+        if config.HEALTH_CHECK_ENABLED:
+            self.health_checker = HealthChecker(
+                config=config,
+                notification=self.notification,
+                okx_client=self.okx_client,
+                data_manager=self.data_manager
+            )
+
+    def start_health_check(self):
+        """启动健康检查"""
+        if self.health_checker:
+            self.health_checker.start()
+            self.logger.info("健康检查已启动")
+
+    def stop_health_check(self):
+        """停止健康检查"""
+        if self.health_checker:
+            self.health_checker.stop()
+            self.logger.info("健康检查已停止")
     
     def fetch_and_store_data(self):
         """增量获取K线数据（只获取本地没有的最新数据）"""
-        print(f"[{datetime.now()}] 获取K线数据（增量更新）...")
-        
+        self.logger.info(f"获取K线数据（增量更新）")
+
         for interval in self.config.KLINE_INTERVALS:
             # 获取本地最新数据的时间戳
             local_data = self.data_manager.get_klines(interval, 1)
@@ -56,15 +79,15 @@ class BTCTader:
                 klines = self.okx_client.get_klines_since(interval, latest_ts)
                 if klines:
                     self.data_manager.save_klines(interval, klines)
-                    print(f"  {interval}: +{len(klines)} 条")
+                    self.logger.info(f"{interval}: +{len(klines)} 条新数据")
                 else:
-                    print(f"  {interval}: 已是最新")
+                    self.logger.info(f"{interval}: 已是最新")
             else:
                 # 本地没有数据，获取初始数据
                 klines = self.okx_client.get_klines(interval, 300)
                 if klines:
                     self.data_manager.save_klines(interval, klines)
-                    print(f"  {interval}: {len(klines)} 条")
+                    self.logger.info(f"{interval}: {len(klines)} 条初始数据")
 
     def run_analysis(self, force: bool = False):
         now = datetime.now()
@@ -75,12 +98,11 @@ class BTCTader:
         
         self.last_analysis_time["periodic"] = now
         
-        print(f"\n[{now}] 开始指标信号分析...")
         self.logger.info(f"开始指标信号分析 (策略: {self.strategy_version})")
         
         klines_1h = self.data_manager.get_klines("1h", 100)
         if klines_1h.empty:
-            print("没有K线数据")
+            self.logger.warning("没有K线数据")
             return None
         
         df_with_indicators = calculate_all_indicators(klines_1h)
@@ -786,11 +808,10 @@ class BTCTader:
         return "hold"
     
     def start(self):
-        print("=" * 50)
-        print("BTC TradingAgents 交易系统启动")
-        print(f"模式: {'模拟盘' if self.config.DRY_RUN else '实盘'}")
-        print(f"交易对: {self.config.TRADING_INSTRUMENT}")
-        print("=" * 50)
+        self.logger.info("BTC TradingAgents 交易系统启动",
+            mode='模拟盘' if self.config.DRY_RUN else '实盘',
+            instrument=self.config.TRADING_INSTRUMENT
+        )
         
         self.logger.info(f"=== 系统启动 | 模式: {'模拟盘' if self.config.DRY_RUN else '实盘'} | 交易对: {self.config.TRADING_INSTRUMENT} ===")
         
@@ -845,15 +866,17 @@ class BTCTader:
         
         # 每周报告（每周一早上9点）
         scheduler.add_job(self.send_weekly_report_job, 'cron', day_of_week='mon', hour=9, minute=0, id="weekly_report")
-        
-        print("调度器已启动，按Ctrl+C退出")
-        self.logger.info("调度器已启动")
-        
+
+        # 启动健康检查
+        self.start_health_check()
+
+        self.logger.info("调度器已启动，按Ctrl+C退出")
+
         try:
             scheduler.start()
         except (KeyboardInterrupt, SystemExit):
-            print("\n系统退出")
             self.logger.info("系统退出")
+            self.stop_health_check()
     
     def send_daily_report_job(self):
         """每日报告定时任务"""

@@ -1,15 +1,17 @@
 from typing import Optional, Dict, Any, List
 import pandas as pd
 from utils.indicators import calculate_all_indicators
+from core.logger import get_logger
 
 
 class Trader:
     """核心交易逻辑 - V3"""
-    
+
     def __init__(self, config, executor):
         self.config = config
         self.executor = executor
-        
+        self.logger = get_logger(config=config)
+
         # 策略参数
         self.atr_sl = 2.0
         self.risk_percent = 0.02
@@ -17,7 +19,7 @@ class Trader:
         self.max_hours = 12
         self.enable_add_position = True
         self.max_add_count = 3
-        
+
         # 持仓状态
         self.position = None
     
@@ -26,35 +28,37 @@ class Trader:
         version: 'original', 'moderate'
         """
         if df.empty or len(df) < 50:
+            self.logger.warning("数据不足，无法分析", df_len=len(df) if not df.empty else 0)
             return None
-        
+
         latest = df.iloc[-1]
-        
+
         # 趋势判断
         trend = self._get_trend(df)
-        
+
         # 判断震荡市
         is_ranging = self._is_ranging(df)
-        
+
         # 获取交易信号
         signal = self._get_signal(latest, trend)
-        
+
         if signal == "hold":
+            self.logger.debug(f"无交易信号", trend=trend, is_ranging=is_ranging)
             return None
-        
+
         # 计算止损止盈
         stop_loss, tp1, tp2, atr = self._calculate_stoploss_takeprofit(
             latest, current_price, signal
         )
-        
+
         # 计算仓位
         position_size = self.calculate_position_size(current_price, atr)
-        
+
         # moderate策略：震荡市仓位减半
         if version == 'moderate' and is_ranging:
             position_size = position_size * 0.5
-        
-        return {
+
+        result = {
             "action": signal,
             "confidence": 0.8,
             "stop_loss": stop_loss,
@@ -67,6 +71,19 @@ class Trader:
             "position_size": position_size,
             "approved": True
         }
+
+        self.logger.info(f"市场分析完成",
+            version=version,
+            signal=signal,
+            trend=trend,
+            is_ranging=is_ranging,
+            position_size=position_size,
+            stop_loss=stop_loss,
+            tp1=tp1,
+            tp2=tp2
+        )
+
+        return result
     
     def get_max_hours(self, df: pd.DataFrame) -> int:
         """获取持仓超时时间"""
@@ -81,7 +98,7 @@ class Trader:
     def check_position(self, df: pd.DataFrame, current_price: float) -> Optional[Dict]:
         """检查持仓状态，返回操作指令"""
         position = self.executor.get_position()
-        
+
         if not position:
             return None
         
@@ -130,6 +147,12 @@ class Trader:
             
             # 检查加仓（同向信号）
             if signal == action and self.enable_add_position and add_count < self.max_add_count:
+                self.logger.log_trade("add_signal", {
+                    'action': action,
+                    'signal': signal,
+                    'add_count': add_count,
+                    'max_add_count': self.max_add_count
+                })
                 return {"action": "add", "add_count": add_count + 1}
         
         return None
@@ -170,29 +193,34 @@ class Trader:
         """判断趋势"""
         if len(df) < 24:
             return "neutral"
-        
+
         ma20_now = df.iloc[-1].get('ma20')
         ma20_prev = df.iloc[-24].get('ma20')
-        
+
         if not ma20_now or not ma20_prev:
             return "neutral"
-        
+
         if ma20_now > ma20_prev * 1.01:
+            self.logger.debug(f"趋势判断: 上涨", ma20_now=ma20_now, ma20_prev=ma20_prev)
             return "up"
         elif ma20_now < ma20_prev * 0.99:
+            self.logger.debug(f"趋势判断: 下跌", ma20_now=ma20_now, ma20_prev=ma20_prev)
             return "down"
         else:
+            self.logger.debug(f"趋势判断: 震荡", ma20_now=ma20_now, ma20_prev=ma20_prev)
             return "neutral"
     
     def _is_ranging(self, df: pd.DataFrame) -> bool:
         """判断是否震荡市"""
         if len(df) < 25:
             return False
-        
+
         latest = df.iloc[-1]
         adx = latest.get('adx', 0)
-        
-        return adx < 25
+
+        is_ranging = adx < 25
+        self.logger.debug(f"震荡市判断", is_ranging=is_ranging, adx=adx)
+        return is_ranging
     
     def _get_signal(self, latest: pd.Series, trend: str) -> str:
         """获取交易信号 - V2原始策略"""

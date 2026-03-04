@@ -3,6 +3,8 @@ import threading
 import time
 from typing import Optional
 from config import Config
+from core.retry import retry_on_network_error
+from core.logger import get_logger
 
 
 class TelegramBot:
@@ -13,43 +15,55 @@ class TelegramBot:
         self.offset = 0
         self.running = False
         self.trader = None
+        self.logger = get_logger(config=config)
         
+    @retry_on_network_error(max_retries=3, backoff_factor=1.5)
     def send_message(self, message: str, chat_id: str = None) -> bool:
         if not self.token or not self.chat_ids:
+            self.logger.warning("Telegram未配置", has_token=bool(self.token), has_chat_ids=bool(self.chat_ids))
             return False
-        
+
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-        
+
         success = True
         targets = [chat_id] if chat_id else self.chat_ids
-        
+
         for cid in targets:
             data = {
                 "chat_id": cid.strip(),
                 "text": message,
                 "parse_mode": "Markdown"
             }
-            
+
             try:
                 response = requests.post(url, json=data, timeout=10)
                 if response.status_code != 200:
+                    self.logger.warning(
+                        "Telegram消息发送失败",
+                        chat_id=cid,
+                        status_code=response.status_code,
+                        response_text=response.text[:200]
+                    )
                     success = False
-            except Exception:
+                else:
+                    self.logger.debug("Telegram消息发送成功", chat_id=cid)
+            except Exception as e:
+                self.logger.log_error_with_context(e, context={'task': 'send_message', 'chat_id': cid})
                 success = False
-        
+
         return success
     
     def start_polling(self, trader=None):
         if not self.token:
-            print("Telegram bot token not configured")
+            self.logger.warning("Telegram bot token未配置")
             return
-        
+
         self.trader = trader
         self.running = True
-        
+
         thread = threading.Thread(target=self._poll_loop, daemon=True)
         thread.start()
-        print("Telegram 命令处理器已启动")
+        self.logger.info("Telegram命令处理器已启动")
     
     def stop_polling(self):
         self.running = False
@@ -62,10 +76,11 @@ class TelegramBot:
                     self._handle_update(update)
                     self.offset = update['update_id'] + 1
             except Exception as e:
-                print(f"Telegram polling error: {e}")
-            
+                self.logger.log_error_with_context(e, context={'task': 'poll_loop', 'offset': self.offset})
+
             time.sleep(2)
     
+    @retry_on_network_error(max_retries=2, backoff_factor=1.0)
     def _get_updates(self):
         url = f"https://api.telegram.org/bot{self.token}/getUpdates"
         params = {"offset": self.offset, "timeout": 30}
@@ -74,9 +89,12 @@ class TelegramBot:
             if response.status_code == 200:
                 data = response.json()
                 if data.get("ok"):
-                    return data.get("result", [])
-        except:
-            pass
+                    result = data.get("result", [])
+                    if result:
+                        self.logger.debug(f"收到Telegram更新", count=len(result))
+                    return result
+        except Exception as e:
+            self.logger.log_error_with_context(e, context={'task': 'get_updates', 'offset': self.offset})
         return []
     
     def _handle_update(self, update):

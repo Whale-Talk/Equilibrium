@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from typing import List, Optional, Dict
 from config import Config
 from dotenv import load_dotenv
+from core.retry import retry_on_network_error, with_circuit_breaker
+from core.logger import get_logger
 
 load_dotenv()
 
@@ -23,19 +25,41 @@ class OKXClient:
         self.api_key = os.getenv("OKX_API_KEY", "") or config.OKX_API_KEY
         self.secret_key = os.getenv("OKX_SECRET_KEY", "") or config.OKX_SECRET_KEY
         self.passphrase = os.getenv("OKX_PASSPHRASE", "") or config.OKX_PASSPHRASE
+        self.logger = get_logger(config=config)
+
+        # 代理设置
+        self.proxies = {
+            "http": "http://127.0.0.1:7897",
+            "https": "http://127.0.0.1:7897"
+        }
+
+        # 连接状态
+        self.last_successful_request = None
+        self.consecutive_failures = 0
+
+        # 熔断器（如果启用）
+        self._circuit_breaker_enabled = getattr(config, 'CIRCUIT_BREAKER_ENABLED', True)
     
     def _sign(self, timestamp: str, method: str, path: str, body: str = "") -> str:
         message = timestamp + method + path + body
         mac = hmac.new(self.secret_key.encode(), message.encode(), hashlib.sha256)
         return base64.b64encode(mac.digest()).decode()
     
+    @retry_on_network_error(
+        max_retries=lambda self: self.config.API_MAX_RETRIES,
+        backoff_factor=lambda self: self.config.API_BACKOFF_FACTOR,
+        backoff_max=lambda self: self.config.API_MAX_TIMEOUT,
+        logger=lambda self: self.logger
+    )
     def _request(self, method: str, path: str, params: Dict = None) -> Dict:
         if not self.api_key or not self.secret_key:
-            return {"code": "-1", "msg": "API key not configured"}
-        
+            error_msg = "API key not configured"
+            self.logger.error(error_msg)
+            return {"code": "-1", "msg": error_msg}
+
         url = self.base_url + path
         timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-        
+
         query = ""
         body = ""
         if params:
@@ -45,9 +69,9 @@ class OKXClient:
             else:
                 import json
                 body = json.dumps(params)
-        
+
         sign = self._sign(timestamp, method, path + query, body)
-        
+
         headers = {
             "Content-Type": "application/json",
             "OK-ACCESS-KEY": self.api_key,
@@ -55,23 +79,54 @@ class OKXClient:
             "OK-ACCESS-TIMESTAMP": timestamp,
             "OK-ACCESS-PASSPHRASE": self.passphrase
         }
-        
-        proxies = {
-            "http": "http://127.0.0.1:7897",
-            "https": "http://127.0.0.1:7897"
-        }
-        
+
+        # 记录API调用
+        self.logger.log_api_call("OKX", path, params, result=None)
+
         try:
+            timeout = getattr(self.config, 'API_TIMEOUT', 15)
             if method == "GET":
-                response = requests.get(url, headers=headers, timeout=15, proxies=proxies)
+                response = requests.get(url, headers=headers, timeout=timeout, proxies=self.proxies)
             else:
-                response = requests.post(url, headers=headers, data=body, timeout=15, proxies=proxies)
+                response = requests.post(url, headers=headers, data=body, timeout=timeout, proxies=self.proxies)
+
             if response.status_code != 200:
-                return {"code": "-1", "msg": f"HTTP {response.status_code}: {response.text}"}
-            return response.json()
+                error_msg = f"HTTP {response.status_code}: {response.text}"
+                self.logger.log_api_call("OKX", path, params, error=error_msg)
+                return {"code": "-1", "msg": error_msg}
+
+            result = response.json()
+            self.logger.log_api_call("OKX", path, params, result={"code": result.get("code")})
+
+            # 更新连接状态
+            self._on_request_success()
+            return result
+
         except Exception as e:
+            self._on_request_failure()
+            self.logger.log_error_with_context(
+                e,
+                context={'method': method, 'path': path, 'params': params}
+            )
             import traceback
             return {"code": "-1", "msg": str(e), "trace": traceback.format_exc()}
+
+    def _on_request_success(self):
+        """请求成功时的处理"""
+        self.last_successful_request = datetime.now()
+        self.consecutive_failures = 0
+
+    def _on_request_failure(self):
+        """请求失败时的处理"""
+        self.consecutive_failures += 1
+
+    def get_connection_status(self) -> Dict:
+        """获取连接状态"""
+        return {
+            'last_success': self.last_successful_request.isoformat() if self.last_successful_request else None,
+            'consecutive_failures': self.consecutive_failures,
+            'is_connected': self.consecutive_failures < 3
+        }
     
     def get_balance(self) -> Optional[Dict]:
         """获取账户余额"""
@@ -119,7 +174,7 @@ class OKXClient:
                 "to": "6"      # 资金账户
             }
         
-        print(f"划转参数: {params}")
+        self.logger.info(f"资金划转", side=side, currency=currency, amount=amount, params=params)
         data = self._request("POST", "/api/v5/asset/transfer", params)
         return data
     
@@ -160,7 +215,7 @@ class OKXClient:
                 break
             
             all_klines.extend(klines)
-            print(f"第{fetch_count}次: 获取 {len(klines)} 条, 总计: {len(all_klines)}")
+            self.logger.info(f"获取K线数据", fetch_count=fetch_count, count=len(klines), total=len(all_klines))
             
             # OKX返回倒序，最新在前，最后一条是最早的
             # 用最后一条的时间戳作为after，获取更早的数据
@@ -240,10 +295,11 @@ class OKXClient:
             if data.get("code") == "0":
                 return data.get("data", [])
             else:
-                print(f"Error getting klines: {data}")
+                self.logger.log_api_call("OKX", "/api/v5/market/history-candles", params, error=data)
                 return []
         except Exception as e:
-            print(f"Exception getting klines: {e}")
+            self.logger.log_error_with_context(e, context={'task': 'get_klines_impl'})
+            return []
             return []
     
     def get_klines_full(self, interval: str, limit: int = 2000) -> List[List]:
@@ -251,7 +307,7 @@ class OKXClient:
         try:
             import ccxt
         except ImportError:
-            print("请安装ccxt: pip install ccxt")
+            self.logger.error("ccxt未安装，请运行: pip install ccxt")
             return self.get_klines(interval, limit)
         
         exchange = ccxt.okx({
@@ -287,7 +343,7 @@ class OKXClient:
                 break
             
             klines.extend(fetched)
-            print(f"第{request_count}次: 获取 {len(fetched)} 条, 总计: {len(klines)}")
+            self.logger.info(f"获取K线(ccxt)", request_count=request_count, count=len(fetched), total=len(klines))
             
             if len(klines) >= limit:
                 break
@@ -318,7 +374,8 @@ class OKXClient:
                     return float(tickers[0].get("last", 0))
             return None
         except Exception as e:
-            print(f"Exception getting current price: {e}")
+            self.logger.log_error_with_context(e, context={'task': 'get_current_price'})
+            return None
             return None
 
     def format_klines(self, klines: List[List]) -> pd.DataFrame:

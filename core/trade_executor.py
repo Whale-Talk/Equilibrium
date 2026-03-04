@@ -4,10 +4,11 @@ from config import Config
 from core.data_manager import DataManager
 from core.notification import NotificationManager
 from core.okx_client import OKXClient
+from core.logger import get_logger
 
 
 class TradeExecutor:
-    def __init__(self, config: type = Config, 
+    def __init__(self, config: type = Config,
                  data_manager: DataManager = None,
                  notification: NotificationManager = None,
                  okx_client: OKXClient = None):
@@ -24,10 +25,11 @@ class TradeExecutor:
         self.max_hours = 12  # 持仓超时时间
         self.enable_add_position = True  # 加仓开关
         self.add_count = 0  # 加仓次数
+        self.logger = get_logger(config=config)
     
-    def open_position(self, action: str, price: float, amount: float, 
+    def open_position(self, action: str, price: float, amount: float,
                      leverage: int, reason: str = "",
-                     stop_loss: float = None, take_profit_tp1: float = None, 
+                     stop_loss: float = None, take_profit_tp1: float = None,
                      take_profit_tp2: float = None, atr: float = None) -> bool:
         # 实盘下单
         if not self.config.DRY_RUN:
@@ -40,14 +42,19 @@ class TradeExecutor:
             }
             result = self.okx_client._request('POST', '/api/v5/trade/order', order)
             if result.get('code') != '0':
-                print(f"开仓失败: {result}")
+                self.logger.error(f"开仓失败", action=action, result=result)
                 return False
-            print(f"实盘开仓成功: {action} {amount} USDT")
+            self.logger.info(f"实盘开仓成功", action=action, amount=amount)
         else:
-            sl_info = f", 止损: ${stop_loss:.2f}" if stop_loss else ""
-            tp1_info = f", 止盈1: ${take_profit_tp1:.2f}" if take_profit_tp1 else ""
-            tp2_info = f", 止盈2: ${take_profit_tp2:.2f}" if take_profit_tp2 else ""
-            print(f"[DRY RUN] {'买入' if action == 'buy' else '卖出'} {amount} USDT @ ${price}, 杠杆: {leverage}x{sl_info}{tp1_info}{tp2_info}")
+            self.logger.info(f"模拟开仓",
+                action=action,
+                amount=amount,
+                price=price,
+                leverage=leverage,
+                stop_loss=stop_loss,
+                take_profit_tp1=take_profit_tp1,
+                take_profit_tp2=take_profit_tp2
+            )
         
         self.position = {
             "action": action,
@@ -67,6 +74,18 @@ class TradeExecutor:
         }
         self.add_count = 0
         
+        self.logger.log_trade("open", {
+            'action': action,
+            'price': price,
+            'amount': amount,
+            'leverage': leverage,
+            'stop_loss': stop_loss,
+            'take_profit_tp1': take_profit_tp1,
+            'take_profit_tp2': take_profit_tp2,
+            'atr': atr,
+            'reason': reason
+        })
+
         self.data_manager.save_trade(
             action=action,
             price=price,
@@ -75,7 +94,7 @@ class TradeExecutor:
             status="open",
             reason=reason
         )
-        
+
         self.notification.send_trade_signal(action, price, amount, leverage, reason)
         
         return True
@@ -97,9 +116,18 @@ class TradeExecutor:
         self.position["add_count"] = self.position.get("add_count", 0) + 1
         self.position["add_prices"].append(price)
         self.add_count = self.position["add_count"]
-        
+
+        self.logger.log_trade("add", {
+            'action': self.position['action'],
+            'add_price': price,
+            'add_amount': amount,
+            'new_avg_price': new_price,
+            'new_amount': new_amount,
+            'add_count': self.add_count
+        })
+
         if self.config.DRY_RUN:
-            print(f"[DRY RUN] ➕ 加仓 @ ${price:.2f}, 仓位: ${new_amount:.2f}")
+            self.logger.info(f"模拟加仓", price=price, amount=amount, new_amount=new_amount)
         
         return True
     
@@ -125,9 +153,9 @@ class TradeExecutor:
             }
             result = self.okx_client._request('POST', '/api/v5/trade/order', order)
             if result.get('code') != '0':
-                print(f"平仓失败: {result}")
+                self.logger.error(f"平仓失败", action=action, result=result)
                 return None
-            print(f"实盘平仓成功: {close_side} {amount} USDT")
+            self.logger.info(f"实盘平仓成功", side=close_side, amount=amount)
         
         if action == "buy":
             pnl = (close_price - entry_price) / entry_price * amount * leverage
@@ -135,9 +163,20 @@ class TradeExecutor:
             pnl = (entry_price - close_price) / entry_price * amount * leverage
         
         self.balance += pnl
-        
+
+        self.logger.log_trade("close", {
+            'action': action,
+            'entry_price': entry_price,
+            'close_price': close_price,
+            'amount': amount,
+            'leverage': leverage,
+            'pnl': pnl,
+            'pnl_pct': pnl / (entry_price * amount / leverage) * 100 if entry_price else 0,
+            'reason': reason
+        })
+
         if self.config.DRY_RUN:
-            print(f"[DRY RUN] 平仓 @ ${close_price}, 盈亏: ${pnl:.2f}, 原因: {reason}")
+            self.logger.info(f"模拟平仓", close_price=close_price, pnl=pnl, reason=reason)
         
         self.data_manager.save_trade(
             action=f"close_{action}",
@@ -161,19 +200,29 @@ class TradeExecutor:
         """检查止损（含移动止损）"""
         if not self.position:
             return False
-        
+
         action = self.position["action"]
         trailing_stop = self.position.get("trailing_stop")
-        
+
         # 检查移动止损
         if trailing_stop:
             if action == "buy" and current_price <= trailing_stop:
+                self.logger.log_trade("stop_loss", {
+                    'action': action,
+                    'current_price': current_price,
+                    'stop_price': trailing_stop
+                })
                 self.close_position(current_price, "止损")
                 return True
             elif action == "sell" and current_price >= trailing_stop:
+                self.logger.log_trade("stop_loss", {
+                    'action': action,
+                    'current_price': current_price,
+                    'stop_price': trailing_stop
+                })
                 self.close_position(current_price, "止损")
                 return True
-        
+
         return False
     
     def check_take_profit(self, current_price: float) -> bool:
@@ -192,22 +241,44 @@ class TradeExecutor:
             if action == "buy" and current_price >= tp1:
                 self.position["tp1_hit"] = True
                 self.position["trailing_stop"] = entry_price  # 移动止损到保本
+                self.logger.log_trade("tp1", {
+                    'action': action,
+                    'current_price': current_price,
+                    'tp_price': tp1,
+                    'new_trailing_stop': entry_price
+                })
                 if self.config.DRY_RUN:
-                    print(f"[DRY RUN] ✅ 第一档止盈触发, 止损移至保本")
+                    self.logger.info("第一档止盈触发，止损移至保本")
                 return True
             elif action == "sell" and current_price <= tp1:
                 self.position["tp1_hit"] = True
                 self.position["trailing_stop"] = entry_price
+                self.logger.log_trade("tp1", {
+                    'action': action,
+                    'current_price': current_price,
+                    'tp_price': tp1,
+                    'new_trailing_stop': entry_price
+                })
                 if self.config.DRY_RUN:
-                    print(f"[DRY RUN] ✅ 第一档止盈触发, 止损移至保本")
+                    self.logger.info("第一档止盈触发，止损移至保本")
                 return True
-        
+
         # 第二档止盈
         if tp1_hit and tp2:
             if action == "buy" and current_price >= tp2:
+                self.logger.log_trade("tp2", {
+                    'action': action,
+                    'current_price': current_price,
+                    'tp_price': tp2
+                })
                 self.close_position(current_price, "第二档止盈")
                 return True
             elif action == "sell" and current_price <= tp2:
+                self.logger.log_trade("tp2", {
+                    'action': action,
+                    'current_price': current_price,
+                    'tp_price': tp2
+                })
                 self.close_position(current_price, "第二档止盈")
                 return True
         
@@ -217,17 +288,24 @@ class TradeExecutor:
         """检查持仓超时"""
         if not self.position:
             return False
-        
+
         entry_time = self.position.get("entry_time")
         if not entry_time:
             return False
-        
+
         hours_held = (datetime.now() - entry_time).total_seconds() / 3600
-        
+
         if hours_held >= self.max_hours:
+            self.logger.log_trade("timeout", {
+                'action': self.position['action'],
+                'entry_price': self.position.get('entry_price'),
+                'current_price': current_price,
+                'hours_held': hours_held,
+                'max_hours': self.max_hours
+            })
             self.close_position(current_price, f"超时({int(hours_held)}h)")
             return True
-        
+
         return False
     
     def get_balance(self) -> float:
@@ -255,9 +333,13 @@ class TradeExecutor:
             self.total_withdrawn += withdrawn
             self.balance = self.base_balance
             self.last_withdraw_month = current_month
-            
+
             msg = f"💰 每月收益提取\n提取金额: ${withdrawn:.2f}\n当前余额: ${self.balance:.2f}\n累计提取: ${self.total_withdrawn:.2f}"
-            print(msg)
+            self.logger.info(f"每月收益提取",
+                withdrawn=withdrawn,
+                current_balance=self.balance,
+                total_withdrawn=self.total_withdrawn
+            )
             self.notification.send_message(msg)
             
             self.data_manager.save_balance(self.balance, f"withdraw_{current_month}")

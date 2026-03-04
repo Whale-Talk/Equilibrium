@@ -1,6 +1,33 @@
 # Equilibrium - BTC 量化交易系统
 
-## v4.1 最新稳定版
+## v4.2 最新稳定版
+
+### v4.2 更新内容
+
+#### 日志规范化
+- 增强Logger类，支持结构化日志（JSON格式）
+- 添加专用日志方法：`log_trade()`, `log_api_call()`, `log_error_with_context()`
+- 添加`@log_execution`装饰器自动记录函数执行
+- 所有关键操作（开仓、平仓、加仓）使用统一日志记录
+
+#### 断线重连机制
+- 创建`core/retry.py`重试装饰器模块
+- 支持指数退避策略，自动重试失败请求
+- OKXClient API调用添加重试机制
+- TelegramBot API调用添加重试机制
+
+#### 健康检查
+- 创建`core/health_check.py`健康检查模块
+- 定期检查API连通性（OKX、Telegram）
+- 定期检查数据库连接状态
+- 健康状态异常时自动告警
+
+#### 系统健壮性
+- DataManager添加连接池，避免频繁创建连接
+- 所有网络调用添加超时和重试
+- 异常处理完善，记录完整堆栈信息
+
+---
 
  Equilibrium 是基于技术指标的量化交易系统，采用新架构：
 - **核心逻辑**（trader.py）- 信号分析、持仓管理
@@ -20,9 +47,14 @@ Equilibrium/
 │   ├── trade_executor.py      # 交易执行器
 │   ├── data_manager.py        # 数据管理
 │   ├── notification.py        # Telegram通知
-│   └── logger.py              # 日志功能
+│   ├── logger.py              # 日志功能 (已增强)
+│   ├── retry.py              # 重试装饰器 (新增)
+│   └── health_check.py       # 健康检查 (新增)
 ├── utils/
 │   └── indicators.py          # 技术指标
+├── logs/                      # 日志目录
+│   ├── equilibrium_YYYYMMDD.log      # 主日志
+│   └── equilibrium_error_YYYYMMDD.log # 错误日志
 └── tests/                     # 测试
 ```
 

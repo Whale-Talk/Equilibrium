@@ -3,22 +3,68 @@ import pandas as pd
 from datetime import datetime
 from typing import List, Dict, Optional
 from config import Config
+from core.logger import get_logger
 
 
 class DataManager:
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: str = None, config=None):
         # 默认使用K目录的数据库
         if db_path is None:
             self.db_path = "/home/mjy/AI量化/K/data/btc_klines.db"
         else:
             self.db_path = db_path
+
+        self.config = config
+        self.logger = get_logger(config=config)
+
+        # 连接池
+        self._connection_pool = {}
+        self._max_pool_size = 5
+
         self._init_db()
+
+    def _get_connection(self):
+        """从连接池获取或创建数据库连接"""
+        import threading
+        thread_id = threading.get_ident()
+
+        if thread_id in self._connection_pool:
+            try:
+                # 验证连接是否有效
+                self._connection_pool[thread_id].execute("SELECT 1")
+                return self._connection_pool[thread_id]
+            except:
+                # 连接已失效，移除并重新创建
+                del self._connection_pool[thread_id]
+
+        try:
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self._connection_pool[thread_id] = conn
+            return conn
+        except Exception as e:
+            self.logger.log_error_with_context(e, context={'task': 'get_connection', 'db_path': self.db_path})
+            raise
+
+    def _close_connection(self, conn=None):
+        """关闭数据库连接"""
+        if conn:
+            conn.close()
+        else:
+            # 关闭当前线程的所有连接
+            import threading
+            thread_id = threading.get_ident()
+            if thread_id in self._connection_pool:
+                try:
+                    self._connection_pool[thread_id].close()
+                except:
+                    pass
+                del self._connection_pool[thread_id]
 
     def _init_db(self):
         import os
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        
-        conn = sqlite3.connect(self.db_path)
+
+        conn = self._get_connection()
         cursor = conn.cursor()
         
         for interval in Config.KLINE_INTERVALS:
@@ -60,14 +106,15 @@ class DataManager:
         """)
         
         conn.commit()
-        conn.close()
+        # 不关闭连接，放入连接池
 
     def save_klines(self, interval: str, klines: List[List]):
         """保存K线数据到数据库（自动去重，保持连续）"""
         if not klines:
             return
-        
-        conn = sqlite3.connect(self.db_path)
+
+        conn = self._get_connection()
+        self.logger.debug(f"保存K线数据", interval=interval, count=len(klines))
         table_name = f"kline_{interval}"
         
         # 查询已有数据的时间范围
@@ -104,37 +151,52 @@ class DataManager:
                 VALUES (?, ?, ?, ?, ?, ?)
             """, new_data)
             conn.commit()
+            self.logger.info(f"K线数据已保存", interval=interval, new_records=len(new_data), total_records=len(existing_timestamps)+len(new_data))
         
         conn.close()
 
     def get_klines(self, interval: str, limit: int = 100) -> pd.DataFrame:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         table_name = f"kline_{interval}"
-        
+
         # 检查表是否存在
         cursor = conn.cursor()
         cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'")
         if not cursor.fetchone():
-            conn.close()
+            self.logger.warning(f"K线表不存在", table_name=table_name)
             return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        
-        df = pd.read_sql(f"""
-            SELECT timestamp, open, high, low, close, volume
-            FROM {table_name}
-            ORDER BY timestamp DESC
-            LIMIT {limit}
-        """, conn)
-        
-        conn.close()
-        
-        if not df.empty:
-            df = df.iloc[::-1]
-        
-        return df
 
-    def save_trade(self, action: str, price: float, amount: float, leverage: int, 
+        try:
+            df = pd.read_sql(f"""
+                SELECT timestamp, open, high, low, close, volume
+                FROM {table_name}
+                ORDER BY timestamp DESC
+                LIMIT {limit}
+            """, conn)
+
+            if not df.empty:
+                df = df.iloc[::-1]
+
+            self.logger.debug(f"获取K线数据", interval=interval, count=len(df), limit=limit)
+            return df
+        except Exception as e:
+            self.logger.log_error_with_context(e, context={'interval': interval, 'limit': limit})
+            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        table_name = f"kline_{interval}"
+        
+
+    def save_trade(self, action: str, price: float, amount: float, leverage: int,
                    pnl: Optional[float] = None, status: str = "open", reason: str = ""):
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
+        self.logger.log_trade("save", {
+            'action': action,
+            'price': price,
+            'amount': amount,
+            'leverage': leverage,
+            'pnl': pnl,
+            'status': status,
+            'reason': reason
+        })
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -143,10 +205,15 @@ class DataManager:
         """, (int(datetime.now().timestamp()), action, price, amount, leverage, pnl, status, reason))
         
         conn.commit()
-        conn.close()
+        # 不关闭连接，放入连接池
 
     def update_trade_pnl(self, trade_id: int, pnl: float, status: str = "closed"):
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
+        self.logger.log_trade("update_pnl", {
+            'trade_id': trade_id,
+            'pnl': pnl,
+            'status': status
+        })
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -154,10 +221,11 @@ class DataManager:
         """, (pnl, status, trade_id))
         
         conn.commit()
-        conn.close()
+        # 不关闭连接，放入连接池
 
     def get_open_trades(self) -> List[Dict]:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
+        self.logger.debug("获取未平仓交易")
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -175,7 +243,8 @@ class DataManager:
         ]
 
     def save_balance(self, balance: float, action: str = ""):
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
+        self.logger.debug(f"保存余额记录", balance=balance, action=action)
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -184,10 +253,11 @@ class DataManager:
         """, (int(datetime.now().timestamp()), balance, action))
         
         conn.commit()
-        conn.close()
+        # 不关闭连接，放入连接池
 
     def get_balance_history(self) -> pd.DataFrame:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
+        self.logger.debug("获取余额历史")
         df = pd.read_sql("""
             SELECT timestamp, balance, action FROM balance_history ORDER BY timestamp
         """, conn)
@@ -195,7 +265,8 @@ class DataManager:
         return df
 
     def get_trades_history(self) -> pd.DataFrame:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
+        self.logger.debug("获取交易历史")
         df = pd.read_sql("""
             SELECT * FROM trades ORDER BY timestamp DESC
         """, conn)
@@ -205,8 +276,9 @@ class DataManager:
     def get_trade_stats(self, days: int = 7) -> dict:
         """获取交易统计"""
         from datetime import datetime, timedelta
-        
-        conn = sqlite3.connect(self.db_path)
+
+        conn = self._get_connection()
+        self.logger.debug(f"获取交易统计", days=days)
         cursor = conn.cursor()
         
         # 总交易统计
