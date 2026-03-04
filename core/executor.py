@@ -71,8 +71,9 @@ class BacktestExecutor(Executor):
     def open_position(self, action: str, price: float, amount: float,
                     leverage: int, stop_loss: float, tp1: float, tp2: float,
                     atr: float, reason: str) -> bool:
-        # 开仓扣手续费
-        open_fee = amount * self.fee_rate
+        # 开仓扣手续费（按合约价值计算：保证金 × 杠杆 × 费率）
+        contract_value = amount * leverage
+        open_fee = contract_value * self.fee_rate
         self.balance -= open_fee
         self.total_fees += open_fee
         
@@ -106,8 +107,10 @@ class BacktestExecutor(Executor):
         if not self.position:
             return False
         
-        # 加仓扣手续费
-        add_fee = amount * self.fee_rate
+        # 加仓扣手续费（按合约价值计算：保证金 × 杠杆 × 费率）
+        leverage = self.position.get("leverage", 10)
+        contract_value = amount * leverage
+        add_fee = contract_value * self.fee_rate
         self.balance -= add_fee
         self.total_fees += add_fee
         
@@ -139,8 +142,9 @@ class BacktestExecutor(Executor):
         
         pnl = amount * pnl_pct
         
-        # 平仓扣手续费
-        close_fee = amount * self.fee_rate
+        # 平仓扣手续费（按合约价值计算：保证金 × 杠杆 × 费率）
+        contract_value = amount * leverage
+        close_fee = contract_value * self.fee_rate
         self.balance += pnl - close_fee
         self.total_fees += close_fee
         

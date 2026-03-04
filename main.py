@@ -497,8 +497,9 @@ class BTCTader:
                         add_size = balance * RISK_PERCENT / (atr * ATR_SL / price)
                         add_size = max(5, min(add_size, balance * 0.3))
                         
-                        # 加仓扣手续费
-                        add_fee = add_size * fee_rate
+                        # 加仓扣手续费（按合约价值计算：保证金 × 杠杆 × 费率）
+                        contract_value = add_size * leverage
+                        add_fee = contract_value * fee_rate
                         balance -= add_fee
                         total_fees += add_fee
                         
@@ -530,8 +531,9 @@ class BTCTader:
                     
                     pnl = position["position_size"] * pnl_pct
                     
-                    # 平仓扣手续费
-                    close_fee = position["position_size"] * fee_rate
+                    # 平仓扣手续费（按合约价值计算：保证金 × 杠杆 × 费率）
+                    contract_value = position["position_size"] * leverage
+                    close_fee = contract_value * fee_rate
                     balance += pnl - close_fee
                     total_fees += close_fee
                     
@@ -553,8 +555,9 @@ class BTCTader:
                 # 计算爆仓价格 (多头)
                 liq_price = price * (1 - 1/leverage + MM_RATE)
                 
-                # 开仓扣手续费
-                open_fee = position_size * fee_rate
+                # 开仓扣手续费（按合约价值计算：保证金 × 杠杆 × 费率）
+                contract_value = position_size * leverage
+                open_fee = contract_value * fee_rate
                 balance -= open_fee
                 total_fees += open_fee
                 
@@ -584,8 +587,9 @@ class BTCTader:
                 # 计算爆仓价格 (空头)
                 liq_price = price * (1 + 1/leverage - MM_RATE)
                 
-                # 开仓扣手续费
-                open_fee = position_size * fee_rate
+                # 开仓扣手续费（按合约价值计算：保证金 × 杠杆 × 费率）
+                contract_value = position_size * leverage
+                open_fee = contract_value * fee_rate
                 balance -= open_fee
                 total_fees += open_fee
                 
@@ -642,8 +646,9 @@ class BTCTader:
                     continue
                 
                 if should_close:
-                    # 平仓扣手续费
-                    close_fee = position["position_size"] * fee_rate
+                    # 平仓扣手续费（按合约价值计算：保证金 × 杠杆 × 费率）
+                    contract_value = position["position_size"] * leverage
+                    close_fee = contract_value * fee_rate
                     total_fees += close_fee
                     
                     # 爆仓处理
@@ -747,7 +752,8 @@ class BTCTader:
         if withdraw_profit:
             print(f"累计提取收益(扣除补充后): ${total_withdrawn:.2f}", flush=True)
         print(f"最终余额: ${balance:.2f}", flush=True)
-        total_return = balance + total_withdrawn - self.config.INITIAL_BALANCE
+        # 总收益 = 余额(含手续费) + 提取 - 初始资金（手续费单独显示）
+        total_return = (balance + total_fees) + total_withdrawn - self.config.INITIAL_BALANCE
         net_return = total_return - total_fees
         print(f"总收益: ${total_return:.2f} ({total_return/self.config.INITIAL_BALANCE*100:.2f}%)", flush=True)
         print(f"手续费: ${total_fees:.2f} (费率: {fee_rate*100}%)", flush=True)
